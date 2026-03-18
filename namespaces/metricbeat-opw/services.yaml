@@ -1,0 +1,55 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: metricbeat-opw
+spec:
+  clusterIP: 10.100.22.47
+  clusterIPs:
+  - 10.100.22.47
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 9200
+    protocol: TCP
+    targetPort: 9200
+  - name: transport
+    port: 9300
+    protocol: TCP
+    targetPort: 9300
+  selector:
+    app: elasticsearch
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vector
+  namespace: metricbeat-opw
+spec:
+  clusterIP: 10.100.28.242
+  clusterIPs:
+  - 10.100.28.242
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: beats
+    port: 5044
+    protocol: TCP
+    targetPort: 5044
+  - name: api
+    port: 8686
+    protocol: TCP
+    targetPort: 8686
+  selector:
+    app: vector
+  sessionAffinity: None
+  type: ClusterIP

@@ -1,0 +1,382 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.63.112
+  clusterIPs:
+  - 10.100.63.112
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - port: 9093
+    protocol: TCP
+    targetPort: 9093
+  selector:
+    app: alertmanager
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datadog-webhook
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.43.59
+  clusterIPs:
+  - 10.100.43.59
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: datadog-webhook
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: demo-api
+  name: demo-api
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.32.183
+  clusterIPs:
+  - 10.100.32.183
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: metrics
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: demo-api
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: demo-database
+  name: demo-database
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.155.203
+  clusterIPs:
+  - 10.100.155.203
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: metrics
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: demo-database
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: demo-fire-ui
+  name: demo-fire-ui
+  namespace: monitoring
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.100.150.74
+  clusterIPs:
+  - 10.100.150.74
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    nodePort: 30742
+    port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: demo-fire-ui
+  sessionAffinity: None
+  type: LoadBalancer
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: demo-frontend
+  name: demo-frontend
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.57.12
+  clusterIPs:
+  - 10.100.57.12
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: metrics
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: demo-frontend
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: grafana
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/version: 12.3.1
+    helm.sh/chart: grafana-10.5.15
+  name: grafana
+  namespace: monitoring
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.100.193.135
+  clusterIPs:
+  - 10.100.193.135
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: service
+    nodePort: 32116
+    port: 80
+    protocol: TCP
+    targetPort: grafana
+  selector:
+    app.kubernetes.io/instance: grafana
+    app.kubernetes.io/name: grafana
+  sessionAffinity: None
+  type: LoadBalancer
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/version: v0.31.0
+    helm.sh/chart: alertmanager-1.33.0
+  name: prometheus-alertmanager
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.167.172
+  clusterIPs:
+  - 10.100.167.172
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 9093
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/name: alertmanager
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/version: v0.31.0
+    helm.sh/chart: alertmanager-1.33.0
+  name: prometheus-alertmanager-headless
+  namespace: monitoring
+spec:
+  clusterIP: None
+  clusterIPs:
+  - None
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 9093
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/name: alertmanager
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/part-of: kube-state-metrics
+    app.kubernetes.io/version: 2.18.0
+    helm.sh/chart: kube-state-metrics-7.1.0
+  name: prometheus-kube-state-metrics
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.77.110
+  clusterIPs:
+  - 10.100.77.110
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/name: kube-state-metrics
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: prometheus-node-exporter
+    app.kubernetes.io/part-of: prometheus-node-exporter
+    app.kubernetes.io/version: 1.10.2
+    helm.sh/chart: prometheus-node-exporter-4.51.1
+  name: prometheus-prometheus-node-exporter
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.55.97
+  clusterIPs:
+  - 10.100.55.97
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: metrics
+    port: 9100
+    protocol: TCP
+    targetPort: 9100
+  selector:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/name: prometheus-node-exporter
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: prometheus-pushgateway
+    app.kubernetes.io/version: v1.11.2
+    helm.sh/chart: prometheus-pushgateway-3.6.0
+  name: prometheus-prometheus-pushgateway
+  namespace: monitoring
+spec:
+  clusterIP: 10.100.95.241
+  clusterIPs:
+  - 10.100.95.241
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 9091
+    protocol: TCP
+    targetPort: 9091
+  selector:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/name: prometheus-pushgateway
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: server
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: prometheus
+    app.kubernetes.io/version: v3.9.1
+    helm.sh/chart: prometheus-28.9.1
+  name: prometheus-server
+  namespace: monitoring
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.100.32.229
+  clusterIPs:
+  - 10.100.32.229
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    nodePort: 32674
+    port: 80
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app.kubernetes.io/component: server
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/name: prometheus
+  sessionAffinity: None
+  type: LoadBalancer

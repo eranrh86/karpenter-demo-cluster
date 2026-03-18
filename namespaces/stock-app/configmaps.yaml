@@ -1,0 +1,4548 @@
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: stock-app
+
+---
+apiVersion: v1
+data:
+  app.py: "# ── Bootstrap ddtrace BEFORE any other imports ─────────────────
+import\
+    \ ddtrace
+ddtrace.patch_all(flask=True, logging=True)
+from ddtrace import tracer
+\
+    # ───────────────────────────────────────────────────────────────
+
+import os,\
+    \ time, threading, random, json, ssl, urllib.request as _ureq
+import logging
+\
+    from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+app\
+    \ = Flask(__name__)
+CORS(app)
+
+# ── Request logger with APM trace correlation\
+    \ ──────────────────
+@app.after_request
+def _dd_log_request(response):
+   \
+    \ ctx = tracer.current_trace_context()
+    entry = {
+        \"timestamp\":\
+    \ time.strftime(\"%Y-%m-%dT%H:%M:%SZ\", time.gmtime()),
+        \"level\":  \
+    \  \"INFO\",
+        \"message\":  f\"{request.method} {request.path} HTTP {response.status_code}\"\
+    ,
+        \"service\":  os.environ.get(\"DD_SERVICE\", \"stock-backend\"),
+\
+    \        \"env\":      os.environ.get(\"DD_ENV\", \"demo\"),
+        \"version\"\
+    :  os.environ.get(\"DD_VERSION\", \"1.0\"),
+        \"http.method\":      request.method,
+\
+    \        \"http.url\":         request.path,
+        \"http.status_code\": response.status_code,
+\
+    \        \"storage\":          \"cloudprem\",
+    }
+    if ctx:
+        # Use\
+    \ lower 64 bits — Datadog log-to-trace correlation standard format
+        entry[\"\
+    dd.trace_id\"] = str(ctx.trace_id & 0xFFFFFFFFFFFFFFFF)
+        entry[\"dd.span_id\"\
+    ]  = str(ctx.span_id)
+    print(json.dumps(entry), flush=True)
+    return response
+\
+    # Migratable state (seeded from env vars on CRIU restore)
+request_count = int(os.environ.get(\"\
+    RESTORED_RC\", \"0\"))
+trade_count   = int(os.environ.get(\"RESTORED_TC\", \"\
+    0\"))
+pnl_total     = float(os.environ.get(\"RESTORED_PNL\", \"0.0\"))
+start_time\
+    \    = time.time()
+state_lock    = threading.Lock()
+
+# Mutable stock list
+\
+    DEFAULTS    = [\"AAPL\", \"TSLA\", \"NVDA\", \"AMZN\", \"MSFT\", \"GOOG\", \"\
+    META\", \"JPM\"]
+stocks      = list(DEFAULTS)
+stocks_lock = threading.Lock()
+\
+    
+# Data caches (refreshed in background)
+price_cache = {}   # sym -> {price,\
+    \ change, pct, ma50, ma100, ma200, volume, chart, _ts}
+fund_cache  = {}   # sym\
+    \ -> {fundamentals}
+data_lock   = threading.Lock()
+loading_set = set()
+
+#\
+    \ Recommendations cache
+rec_cache = []
+rec_lock  = threading.Lock()
+REC_ORDER\
+    \ = {\"strong_buy\": 1, \"buy\": 2, \"hold\": 3, \"underperform\": 4, \"sell\"\
+    : 5}
+
+# ── Stock catalog for search autocomplete ──────────────────────
+# Each\
+    \ entry: (symbol, full_name, exchange, sector, country_code)
+CATALOG = [
+  \
+    \  # US — Technology
+    (\"AAPL\",\"Apple Inc\",\"NASDAQ\",\"Technology\",\"\
+    US\"),
+    (\"MSFT\",\"Microsoft Corp\",\"NASDAQ\",\"Technology\",\"US\"),
+\
+    \    (\"GOOGL\",\"Alphabet Inc (Class A)\",\"NASDAQ\",\"Technology\",\"US\"),
+\
+    \    (\"GOOG\",\"Alphabet Inc (Class C)\",\"NASDAQ\",\"Technology\",\"US\"),
+\
+    \    (\"AMZN\",\"Amazon.com Inc\",\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+\
+    \    (\"META\",\"Meta Platforms Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+   \
+    \ (\"NVDA\",\"NVIDIA Corporation\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"\
+    TSLA\",\"Tesla Inc\",\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"AMD\",\"\
+    Advanced Micro Devices\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"INTC\",\"\
+    Intel Corporation\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"QCOM\",\"Qualcomm\
+    \ Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"AVGO\",\"Broadcom Inc\",\"\
+    NASDAQ\",\"Technology\",\"US\"),
+    (\"TXN\",\"Texas Instruments\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"MU\",\"Micron Technology\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"ASML\",\"ASML Holding\",\"NASDAQ\",\"Technology\",\"NL\"),
+\
+    \    (\"AMAT\",\"Applied Materials\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"\
+    LRCX\",\"Lam Research\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"KLAC\",\"KLA\
+    \ Corporation\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"ADBE\",\"Adobe Inc\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"CRM\",\"Salesforce Inc\",\"NYSE\"\
+    ,\"Technology\",\"US\"),
+    (\"ORCL\",\"Oracle Corporation\",\"NYSE\",\"Technology\"\
+    ,\"US\"),
+    (\"SAP\",\"SAP SE\",\"NYSE\",\"Technology\",\"DE\"),
+    (\"NOW\"\
+    ,\"ServiceNow Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"SNOW\",\"Snowflake\
+    \ Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"PLTR\",\"Palantir Technologies\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"NFLX\",\"Netflix Inc\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    (\"DIS\",\"Walt Disney Co\",\"NYSE\",\"Communication\"\
+    ,\"US\"),
+    (\"SPOT\",\"Spotify Technology\",\"NYSE\",\"Communication\",\"\
+    SE\"),
+    (\"SNAP\",\"Snap Inc\",\"NYSE\",\"Communication\",\"US\"),
+    (\"\
+    PINS\",\"Pinterest Inc\",\"NYSE\",\"Communication\",\"US\"),
+    (\"UBER\",\"\
+    Uber Technologies\",\"NYSE\",\"Technology\",\"US\"),
+    (\"LYFT\",\"Lyft Inc\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"SHOP\",\"Shopify Inc\",\"NYSE\",\"\
+    Technology\",\"CA\"),
+    (\"SQ\",\"Block Inc\",\"NYSE\",\"Technology\",\"US\"\
+    ),
+    (\"COIN\",\"Coinbase Global\",\"NASDAQ\",\"Financial\",\"US\"),
+    (\"\
+    PYPL\",\"PayPal Holdings\",\"NASDAQ\",\"Financial\",\"US\"),
+    # US — Finance
+\
+    \    (\"JPM\",\"JPMorgan Chase\",\"NYSE\",\"Financial\",\"US\"),
+    (\"BAC\"\
+    ,\"Bank of America\",\"NYSE\",\"Financial\",\"US\"),
+    (\"GS\",\"Goldman Sachs\"\
+    ,\"NYSE\",\"Financial\",\"US\"),
+    (\"MS\",\"Morgan Stanley\",\"NYSE\",\"Financial\"\
+    ,\"US\"),
+    (\"WFC\",\"Wells Fargo\",\"NYSE\",\"Financial\",\"US\"),
+    (\"\
+    C\",\"Citigroup Inc\",\"NYSE\",\"Financial\",\"US\"),
+    (\"V\",\"Visa Inc\"\
+    ,\"NYSE\",\"Financial\",\"US\"),
+    (\"MA\",\"Mastercard Inc\",\"NYSE\",\"Financial\"\
+    ,\"US\"),
+    (\"AXP\",\"American Express\",\"NYSE\",\"Financial\",\"US\"),
+\
+    \    (\"BLK\",\"BlackRock Inc\",\"NYSE\",\"Financial\",\"US\"),
+    (\"SCHW\"\
+    ,\"Charles Schwab\",\"NYSE\",\"Financial\",\"US\"),
+    # US — Healthcare
+ \
+    \   (\"JNJ\",\"Johnson & Johnson\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"PFE\"\
+    ,\"Pfizer Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"MRK\",\"Merck & Co\"\
+    ,\"NYSE\",\"Healthcare\",\"US\"),
+    (\"ABBV\",\"AbbVie Inc\",\"NYSE\",\"Healthcare\"\
+    ,\"US\"),
+    (\"LLY\",\"Eli Lilly and Company\",\"NYSE\",\"Healthcare\",\"US\"\
+    ),
+    (\"UNH\",\"UnitedHealth Group\",\"NYSE\",\"Healthcare\",\"US\"),
+   \
+    \ (\"BMY\",\"Bristol-Myers Squibb\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"\
+    AMGN\",\"Amgen Inc\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"GILD\",\"Gilead\
+    \ Sciences\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"BIIB\",\"Biogen Inc\"\
+    ,\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"MRNA\",\"Moderna Inc\",\"NASDAQ\"\
+    ,\"Healthcare\",\"US\"),
+    (\"ISRG\",\"Intuitive Surgical\",\"NASDAQ\",\"Healthcare\"\
+    ,\"US\"),
+    # US — Energy
+    (\"XOM\",\"Exxon Mobil Corp\",\"NYSE\",\"Energy\"\
+    ,\"US\"),
+    (\"CVX\",\"Chevron Corporation\",\"NYSE\",\"Energy\",\"US\"),
+\
+    \    (\"COP\",\"ConocoPhillips\",\"NYSE\",\"Energy\",\"US\"),
+    (\"SLB\",\"\
+    SLB (Schlumberger)\",\"NYSE\",\"Energy\",\"US\"),
+    (\"EOG\",\"EOG Resources\"\
+    ,\"NYSE\",\"Energy\",\"US\"),
+    # US — Consumer
+    (\"KO\",\"Coca-Cola Company\"\
+    ,\"NYSE\",\"Consumer Defensive\",\"US\"),
+    (\"PEP\",\"PepsiCo Inc\",\"NASDAQ\"\
+    ,\"Consumer Defensive\",\"US\"),
+    (\"WMT\",\"Walmart Inc\",\"NYSE\",\"Consumer\
+    \ Defensive\",\"US\"),
+    (\"COST\",\"Costco Wholesale\",\"NASDAQ\",\"Consumer\
+    \ Defensive\",\"US\"),
+    (\"MCD\",\"McDonald's Corp\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"SBUX\",\"Starbucks Corp\",\"NASDAQ\",\"Consumer Cyclical\",\"\
+    US\"),
+    (\"NKE\",\"Nike Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+  \
+    \  (\"HD\",\"Home Depot Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"\
+    LOW\",\"Lowe's Companies\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    # US —\
+    \ Industrial
+    (\"BA\",\"Boeing Company\",\"NYSE\",\"Industrials\",\"US\"),
+\
+    \    (\"CAT\",\"Caterpillar Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"GE\"\
+    ,\"GE Aerospace\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"HON\",\"Honeywell\
+    \ International\",\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"RTX\",\"RTX Corporation\"\
+    ,\"NYSE\",\"Industrials\",\"US\"),
+    (\"LMT\",\"Lockheed Martin\",\"NYSE\"\
+    ,\"Industrials\",\"US\"),
+    (\"NOC\",\"Northrop Grumman\",\"NYSE\",\"Industrials\"\
+    ,\"US\"),
+    (\"UPS\",\"United Parcel Service\",\"NYSE\",\"Industrials\",\"\
+    US\"),
+    (\"FDX\",\"FedEx Corporation\",\"NYSE\",\"Industrials\",\"US\"),
+\
+    \    # US — Real Estate & Utilities
+    (\"AMT\",\"American Tower Corp\",\"NYSE\"\
+    ,\"Real Estate\",\"US\"),
+    (\"PLD\",\"Prologis Inc\",\"NYSE\",\"Real Estate\"\
+    ,\"US\"),
+    (\"NEE\",\"NextEra Energy\",\"NYSE\",\"Utilities\",\"US\"),
+ \
+    \   # Israeli — NASDAQ/NYSE
+    (\"CHKP\",\"Check Point Software\",\"NASDAQ\"\
+    ,\"Technology\",\"IL\"),
+    (\"NICE\",\"NICE Systems Ltd\",\"NASDAQ\",\"Technology\"\
+    ,\"IL\"),
+    (\"WIX\",\"Wix.com Ltd\",\"NASDAQ\",\"Technology\",\"IL\"),
+ \
+    \   (\"MNDY\",\"Monday.com Ltd\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"GLBE\"\
+    ,\"Global-E Online\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"CEVA\",\"CEVA\
+    \ Inc\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"RDWR\",\"Radware Ltd\",\"NASDAQ\"\
+    ,\"Technology\",\"IL\"),
+    (\"TSEM\",\"Tower Semiconductor\",\"NASDAQ\",\"\
+    Technology\",\"IL\"),
+    (\"DOX\",\"Amdocs Limited\",\"NASDAQ\",\"Technology\"\
+    ,\"IL\"),
+    (\"ESLT\",\"Elbit Systems of America\",\"NASDAQ\",\"Industrials\"\
+    ,\"IL\"),
+    # Israeli — TASE
+    (\"TEVA.TA\",\"Teva Pharmaceutical\",\"TASE\"\
+    ,\"Healthcare\",\"IL\"),
+    (\"POLI.TA\",\"Bank Hapoalim\",\"TASE\",\"Financial\"\
+    ,\"IL\"),
+    (\"LUMI.TA\",\"Bank Leumi\",\"TASE\",\"Financial\",\"IL\"),
+ \
+    \   (\"DSCT.TA\",\"Israel Discount Bank\",\"TASE\",\"Financial\",\"IL\"),
+  \
+    \  (\"FIBI.TA\",\"First International Bank\",\"TASE\",\"Financial\",\"IL\"),
+\
+    \    (\"MSBI.TA\",\"Mizrahi Tefahot Bank\",\"TASE\",\"Financial\",\"IL\"),
+ \
+    \   (\"ICL.TA\",\"ICL Group (Israel Chemicals)\",\"TASE\",\"Materials\",\"IL\"\
+    ),
+    (\"ESLT.TA\",\"Elbit Systems\",\"TASE\",\"Industrials\",\"IL\"),
+   \
+    \ (\"BEZQ.TA\",\"Bezeq Israeli Telecom\",\"TASE\",\"Communication\",\"IL\"),
+\
+    \    (\"NICE.TA\",\"NICE Systems\",\"TASE\",\"Technology\",\"IL\"),
+    (\"CHKP.TA\"\
+    ,\"Check Point Software\",\"TASE\",\"Technology\",\"IL\"),
+    (\"TSEM.TA\",\"\
+    Tower Semiconductor\",\"TASE\",\"Technology\",\"IL\"),
+    (\"ELAL.TA\",\"El\
+    \ Al Israel Airlines\",\"TASE\",\"Industrials\",\"IL\"),
+    (\"PHOE.TA\",\"\
+    Phoenix Holdings\",\"TASE\",\"Financial\",\"IL\"),
+    (\"CLAL.TA\",\"Clal Insurance\"\
+    ,\"TASE\",\"Financial\",\"IL\"),
+    (\"ENLT.TA\",\"Enlight Renewable Energy\"\
+    ,\"TASE\",\"Utilities\",\"IL\"),
+    (\"RDWR.TA\",\"Radware Ltd\",\"TASE\",\"\
+    Technology\",\"IL\"),
+    # Israeli — TASE (TA-35 extended)
+    (\"HARL.TA\"\
+    ,\"Harel Insurance Investments\",\"TASE\",\"Financial\",\"IL\"),
+    (\"MGDL.TA\"\
+    ,\"Migdal Insurance\",\"TASE\",\"Financial\",\"IL\"),
+    (\"AZRG.TA\",\"Azrieli\
+    \ Group\",\"TASE\",\"Real Estate\",\"IL\"),
+    (\"AMOT.TA\",\"Amot Investments\"\
+    ,\"TASE\",\"Real Estate\",\"IL\"),
+    (\"GVYM.TA\",\"Gav-Yam Lands Corp\",\"\
+    TASE\",\"Real Estate\",\"IL\"),
+    (\"SAE.TA\",\"Shufersal Ltd\",\"TASE\",\"\
+    Consumer Defensive\",\"IL\"),
+    (\"PTNR.TA\",\"Partner Communications\",\"\
+    TASE\",\"Communication\",\"IL\"),
+    (\"CEL.TA\",\"Cellcom Israel\",\"TASE\"\
+    ,\"Communication\",\"IL\"),
+    (\"NWMD.TA\",\"NewMed Energy\",\"TASE\",\"Energy\"\
+    ,\"IL\"),
+    (\"DLEKG.TA\",\"Delek Group\",\"TASE\",\"Energy\",\"IL\"),
+  \
+    \  (\"ORL.TA\",\"Bazan Oil Refineries\",\"TASE\",\"Energy\",\"IL\"),
+    (\"\
+    NXSN.TA\",\"Next Vision Stabilized Systems\",\"TASE\",\"Industrials\",\"IL\"),
+\
+    \    (\"ELCO.TA\",\"Elco Holdings\",\"TASE\",\"Industrials\",\"IL\"),
+    (\"\
+    ISIN.TA\",\"Israel Corp\",\"TASE\",\"Industrials\",\"IL\"),
+    (\"MTDS.TA\"\
+    ,\"Meitav Investment House\",\"TASE\",\"Financial\",\"IL\"),
+    (\"ALGS.TA\"\
+    ,\"Algomizer\",\"TASE\",\"Technology\",\"IL\"),
+    (\"SPEN.TA\",\"Shapir Engineering\"\
+    ,\"TASE\",\"Industrials\",\"IL\"),
+    (\"FORTY.TA\",\"Formula Systems\",\"TASE\"\
+    ,\"Technology\",\"IL\"),
+    (\"BONS.TA\",\"Bonus BioGroup\",\"TASE\",\"Healthcare\"\
+    ,\"IL\"),
+    (\"OPCT.TA\",\"OPC Energy\",\"TASE\",\"Utilities\",\"IL\"),
+ \
+    \   (\"GFC.TA\",\"GFC Industries\",\"TASE\",\"Industrials\",\"IL\"),
+    # Israeli\
+    \ — NASDAQ/NYSE (additional)
+    (\"INMD\",\"InMode Ltd\",\"NASDAQ\",\"Healthcare\"\
+    ,\"IL\"),
+    (\"FVRR\",\"Fiverr International\",\"NYSE\",\"Technology\",\"IL\"\
+    ),
+    (\"KRNT\",\"Kornit Digital\",\"NASDAQ\",\"Industrials\",\"IL\"),
+   \
+    \ (\"PAYO\",\"Payoneer Global\",\"NASDAQ\",\"Financial\",\"IL\"),
+    (\"ALLT\"\
+    ,\"Allot Communications\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"NNDM\",\"\
+    Nano Dimension\",\"NASDAQ\",\"Technology\",\"IL\"),
+    # Israeli NASDAQ — additional
+\
+    \    (\"CYBR\",\"CyberArk Software\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"\
+    SEDG\",\"SolarEdge Technologies\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"\
+    CAMT\",\"Camtek Ltd\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"SPNS\",\"Sapiens\
+    \ International\",\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"KMDA\",\"Kamada Ltd\"\
+    ,\"NASDAQ\",\"Healthcare\",\"IL\"),
+    (\"GILT\",\"Gilat Satellite Networks\"\
+    ,\"NASDAQ\",\"Technology\",\"IL\"),
+    (\"PERI\",\"Perion Network\",\"NASDAQ\"\
+    ,\"Technology\",\"IL\"),
+    (\"ITRN\",\"Ituran Location and Control\",\"NASDAQ\"\
+    ,\"Technology\",\"IL\"),
+    (\"MGIC\",\"Magic Software Enterprises\",\"NASDAQ\"\
+    ,\"Technology\",\"IL\"),
+    (\"KPLT\",\"Katapult Holdings\",\"NASDAQ\",\"Financial\"\
+    ,\"IL\"),
+    # Israeli — TASE (TA-125 extended)
+    (\"CAMT.TA\",\"Camtek Ltd\"\
+    ,\"TASE\",\"Technology\",\"IL\"),
+    (\"HLAN.TA\",\"Hilan Technologies\",\"\
+    TASE\",\"Technology\",\"IL\"),
+    (\"MLSR.TA\",\"Melisron Real Estate\",\"TASE\"\
+    ,\"Real Estate\",\"IL\"),
+    (\"ISRO.TA\",\"Isrotel Hotels\",\"TASE\",\"Consumer\
+    \ Cyclical\",\"IL\"),
+    (\"FTAL.TA\",\"Fattal Hotels\",\"TASE\",\"Consumer\
+    \ Cyclical\",\"IL\"),
+    (\"ELRN.TA\",\"Elron Electronic Industries\",\"TASE\"\
+    ,\"Technology\",\"IL\"),
+    (\"SPNS.TA\",\"Sapiens International\",\"TASE\"\
+    ,\"Technology\",\"IL\"),
+    (\"KMDA.TA\",\"Kamada Ltd\",\"TASE\",\"Healthcare\"\
+    ,\"IL\"),
+    (\"GILT.TA\",\"Gilat Satellite Networks\",\"TASE\",\"Technology\"\
+    ,\"IL\"),
+    (\"PERI.TA\",\"Perion Network\",\"TASE\",\"Technology\",\"IL\"\
+    ),
+    (\"CYBR.TA\",\"CyberArk Software\",\"TASE\",\"Technology\",\"IL\"),
+\
+    \    (\"SEDG.TA\",\"SolarEdge Technologies\",\"TASE\",\"Technology\",\"IL\"),
+\
+    \    (\"MNDY.TA\",\"Monday.com\",\"TASE\",\"Technology\",\"IL\"),
+    (\"WKME.TA\"\
+    ,\"WalkMe Ltd\",\"TASE\",\"Technology\",\"IL\"),
+    (\"AYAL.TA\",\"Ayalon Insurance\"\
+    ,\"TASE\",\"Financial\",\"IL\"),
+    (\"ILDC.TA\",\"IDB Development Corp\",\"\
+    TASE\",\"Financial\",\"IL\"),
+    (\"DANE.TA\",\"Dan Hotels Corp\",\"TASE\",\"\
+    Consumer Cyclical\",\"IL\"),
+    (\"STRS.TA\",\"Strauss Group\",\"TASE\",\"Consumer\
+    \ Defensive\",\"IL\"),
+    (\"OSEM.TA\",\"Osem Investments\",\"TASE\",\"Consumer\
+    \ Defensive\",\"IL\"),
+    (\"MGIC.TA\",\"Magic Software Enterprises\",\"TASE\"\
+    ,\"Technology\",\"IL\"),
+    (\"ITRN.TA\",\"Ituran Location and Control\",\"\
+    TASE\",\"Technology\",\"IL\"),
+    (\"ORBT.TA\",\"Orbit International\",\"TASE\"\
+    ,\"Industrials\",\"IL\"),
+    (\"AFHL.TA\",\"Africa Israel Holdings\",\"TASE\"\
+    ,\"Real Estate\",\"IL\"),
+    (\"ALHE.TA\",\"Allied Healthcare Israel\",\"TASE\"\
+    ,\"Healthcare\",\"IL\"),
+    (\"DPPA.TA\",\"Discount Investments\",\"TASE\",\"\
+    Financial\",\"IL\"),
+    (\"RTEN.TA\",\"Roten Real Estate\",\"TASE\",\"Real Estate\"\
+    ,\"IL\"),
+    (\"CLIS.TA\",\"Clal Industries\",\"TASE\",\"Industrials\",\"IL\"\
+    ),
+    (\"BYSD.TA\",\"Bydesign Group\",\"TASE\",\"Consumer Cyclical\",\"IL\"\
+    ),
+    # US — More Tech / Cloud / Security
+    (\"DDOG\",\"Datadog Inc\",\"\
+    NASDAQ\",\"Technology\",\"US\"),
+    (\"CRWD\",\"CrowdStrike Holdings\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"ZS\",\"Zscaler Inc\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"PANW\",\"Palo Alto Networks\",\"NASDAQ\",\"Technology\",\"US\"\
+    ),
+    (\"NET\",\"Cloudflare Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"\
+    OKTA\",\"Okta Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"MDB\",\"MongoDB\
+    \ Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"TTD\",\"The Trade Desk\",\"\
+    NASDAQ\",\"Technology\",\"US\"),
+    (\"RBLX\",\"Roblox Corp\",\"NYSE\",\"Communication\"\
+    ,\"US\"),
+    (\"ROKU\",\"Roku Inc\",\"NASDAQ\",\"Communication\",\"US\"),
+\
+    \    (\"ABNB\",\"Airbnb Inc\",\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"\
+    DASH\",\"DoorDash Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"ARM\"\
+    ,\"Arm Holdings\",\"NASDAQ\",\"Technology\",\"GB\"),
+    (\"SMCI\",\"Super Micro\
+    \ Computer\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"DELL\",\"Dell Technologies\"\
+    ,\"NYSE\",\"Technology\",\"US\"),
+    (\"HPQ\",\"HP Inc\",\"NYSE\",\"Technology\"\
+    ,\"US\"),
+    (\"CSCO\",\"Cisco Systems\",\"NASDAQ\",\"Technology\",\"US\"),
+\
+    \    (\"IBM\",\"IBM Corporation\",\"NYSE\",\"Technology\",\"US\"),
+    (\"ACN\"\
+    ,\"Accenture plc\",\"NYSE\",\"Technology\",\"IE\"),
+    # US — SaaS / Cloud /\
+    \ Enterprise
+    (\"ZM\",\"Zoom Video Communications\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"WDAY\",\"Workday Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+\
+    \    (\"HUBS\",\"HubSpot Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"ADSK\"\
+    ,\"Autodesk Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"VEEV\",\"Veeva Systems\
+    \ Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"TWLO\",\"Twilio Inc\",\"NYSE\"\
+    ,\"Technology\",\"US\"),
+    (\"CFLT\",\"Confluent Inc\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"ZI\",\"ZoomInfo Technologies\",\"NASDAQ\",\"Technology\",\"\
+    US\"),
+    (\"BILL\",\"Bill.com Holdings\",\"NYSE\",\"Technology\",\"US\"),
+\
+    \    (\"PCTY\",\"Paylocity Holding\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"\
+    PAYC\",\"Paycom Software\",\"NYSE\",\"Technology\",\"US\"),
+    (\"SMAR\",\"\
+    Smartsheet Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"NTNX\",\"Nutanix Inc\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"DOCN\",\"DigitalOcean Holdings\",\"\
+    NYSE\",\"Technology\",\"US\"),
+    (\"GTLB\",\"GitLab Inc\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"PATH\",\"UiPath Inc\",\"NYSE\",\"Technology\",\"US\"),
+   \
+    \ (\"ESTC\",\"Elastic NV\",\"NYSE\",\"Technology\",\"US\"),
+    (\"CDNS\",\"\
+    Cadence Design Systems\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"SNPS\",\"\
+    Synopsys Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"ANSS\",\"Ansys Inc\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"FTNT\",\"Fortinet Inc\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"AI\",\"C3.ai Inc\",\"NYSE\",\"Technology\",\"\
+    US\"),
+    # US — Fintech / Finance
+    (\"SOFI\",\"SoFi Technologies\",\"NASDAQ\"\
+    ,\"Financial\",\"US\"),
+    (\"HOOD\",\"Robinhood Markets\",\"NASDAQ\",\"Financial\"\
+    ,\"US\"),
+    (\"AFRM\",\"Affirm Holdings\",\"NASDAQ\",\"Financial\",\"US\"),
+\
+    \    (\"UPST\",\"Upstart Holdings\",\"NASDAQ\",\"Financial\",\"US\"),
+    (\"\
+    MSCI\",\"MSCI Inc\",\"NYSE\",\"Financial\",\"US\"),
+    (\"CME\",\"CME Group\
+    \ Inc\",\"NASDAQ\",\"Financial\",\"US\"),
+    (\"NDAQ\",\"Nasdaq Inc\",\"NASDAQ\"\
+    ,\"Financial\",\"US\"),
+    # US — EV / Clean Energy
+    (\"RIVN\",\"Rivian\
+    \ Automotive\",\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"LCID\",\"Lucid\
+    \ Group\",\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"ENPH\",\"Enphase Energy\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"FSLR\",\"First Solar Inc\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"RUN\",\"Sunrun Inc\",\"NASDAQ\",\"Utilities\"\
+    ,\"US\"),
+    (\"BE\",\"Bloom Energy Corp\",\"NYSE\",\"Utilities\",\"US\"),
+\
+    \    # US — Gaming / Entertainment
+    (\"DKNG\",\"DraftKings Inc\",\"NASDAQ\"\
+    ,\"Consumer Cyclical\",\"US\"),
+    (\"EA\",\"Electronic Arts Inc\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    (\"TTWO\",\"Take-Two Interactive\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    # US — Healthcare / Biotech (additional)
+  \
+    \  (\"DXCM\",\"DexCom Inc\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"IDXX\"\
+    ,\"IDEXX Laboratories\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"VRTX\",\"Vertex\
+    \ Pharmaceuticals\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"REGN\",\"Regeneron\
+    \ Pharmaceuticals\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"ILMN\",\"Illumina\
+    \ Inc\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"TDOC\",\"Teladoc Health\",\"\
+    NYSE\",\"Healthcare\",\"US\"),
+    (\"HIMS\",\"Hims & Hers Health\",\"NYSE\"\
+    ,\"Healthcare\",\"US\"),
+    (\"NTRA\",\"Natera Inc\",\"NASDAQ\",\"Healthcare\"\
+    ,\"US\"),
+    (\"RXRX\",\"Recursion Pharmaceuticals\",\"NASDAQ\",\"Healthcare\"\
+    ,\"US\"),
+    # US — Consumer / E-commerce
+    (\"ETSY\",\"Etsy Inc\",\"NASDAQ\"\
+    ,\"Consumer Cyclical\",\"US\"),
+    (\"CHWY\",\"Chewy Inc\",\"NYSE\",\"Consumer\
+    \ Cyclical\",\"US\"),
+    (\"W\",\"Wayfair Inc\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"CVNA\",\"Carvana Co\",\"NYSE\",\"Consumer Cyclical\",\"US\"\
+    ),
+    (\"LULU\",\"Lululemon Athletica\",\"NASDAQ\",\"Consumer Cyclical\",\"\
+    CA\"),
+    (\"ROST\",\"Ross Stores Inc\",\"NASDAQ\",\"Consumer Defensive\",\"\
+    US\"),
+    # US — Semiconductor (additional)
+    (\"MRVL\",\"Marvell Technology\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"MPWR\",\"Monolithic Power Systems\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"SWKS\",\"Skyworks Solutions\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"ON\",\"ON Semiconductor\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"WOLF\",\"Wolfspeed Inc\",\"NYSE\",\"Technology\",\"US\"),
+\
+    \    (\"ACLS\",\"Axcelis Technologies\",\"NASDAQ\",\"Technology\",\"US\"),
+ \
+    \   # US — Space / Quantum
+    (\"RKLB\",\"Rocket Lab USA\",\"NASDAQ\",\"Industrials\"\
+    ,\"US\"),
+    (\"JOBY\",\"Joby Aviation\",\"NYSE\",\"Industrials\",\"US\"),
+\
+    \    (\"IONQ\",\"IonQ Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"SOUN\",\"\
+    SoundHound AI\",\"NASDAQ\",\"Technology\",\"US\"),
+    # Global ADR / Large-Cap
+\
+    \    (\"MELI\",\"MercadoLibre Inc\",\"NASDAQ\",\"Consumer Cyclical\",\"AR\"),
+\
+    \    (\"SE\",\"Sea Limited\",\"NYSE\",\"Technology\",\"SG\"),
+    (\"BIDU\",\"\
+    Baidu Inc\",\"NASDAQ\",\"Technology\",\"CN\"),
+    (\"PDD\",\"PDD Holdings\"\
+    ,\"NASDAQ\",\"Consumer Cyclical\",\"CN\"),
+    (\"TSM\",\"Taiwan Semiconductor\"\
+    ,\"NYSE\",\"Technology\",\"TW\"),
+    (\"NVO\",\"Novo Nordisk\",\"NYSE\",\"Healthcare\"\
+    ,\"DK\"),
+    (\"BABA\",\"Alibaba Group\",\"NYSE\",\"Consumer Cyclical\",\"CN\"\
+    ),
+    (\"JD\",\"JD.com Inc\",\"NASDAQ\",\"Consumer Cyclical\",\"CN\"),
+   \
+    \ # ETFs
+    (\"SPY\",\"SPDR S&P 500 ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"\
+    QQQ\",\"Invesco QQQ Trust\",\"NASDAQ\",\"ETF\",\"US\"),
+    (\"IWM\",\"iShares\
+    \ Russell 2000\",\"NYSE\",\"ETF\",\"US\"),
+    (\"GLD\",\"SPDR Gold Shares\"\
+    ,\"NYSE\",\"ETF\",\"US\"),
+    (\"SLV\",\"iShares Silver Trust\",\"NYSE\",\"\
+    ETF\",\"US\"),
+    (\"USO\",\"United States Oil Fund\",\"NYSE\",\"ETF\",\"US\"\
+    ),
+    (\"TLT\",\"iShares 20+ Year Treasury\",\"NASDAQ\",\"ETF\",\"US\"),
+ \
+    \   (\"VIX\",\"CBOE Volatility Index\",\"CBOE\",\"Index\",\"US\"),
+    # Crypto
+\
+    \    (\"BTC-USD\",\"Bitcoin\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+   \
+    \ (\"ETH-USD\",\"Ethereum\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"\
+    SOL-USD\",\"Solana\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"XRP-USD\"\
+    ,\"XRP / Ripple\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"BNB-USD\"\
+    ,\"Binance Coin\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"DOGE-USD\"\
+    ,\"Dogecoin\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"ADA-USD\",\"\
+    Cardano\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"AVAX-USD\",\"Avalanche\"\
+    ,\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    # Commodities
+    (\"GC=F\"\
+    ,\"Gold Futures\",\"COMEX\",\"Commodities\",\"Global\"),
+    (\"SI=F\",\"Silver\
+    \ Futures\",\"COMEX\",\"Commodities\",\"Global\"),
+    (\"CL=F\",\"Crude Oil\
+    \ WTI\",\"NYMEX\",\"Commodities\",\"Global\"),
+    (\"NG=F\",\"Natural Gas\"\
+    ,\"NYMEX\",\"Commodities\",\"Global\"),
+    (\"HG=F\",\"Copper Futures\",\"COMEX\"\
+    ,\"Commodities\",\"Global\"),
+    # Forex
+    (\"ILS=X\",\"USD/ILS Exchange\
+    \ Rate\",\"Forex\",\"Forex\",\"IL\"),
+    (\"EURUSD=X\",\"EUR/USD Rate\",\"Forex\"\
+    ,\"Forex\",\"EU\"),
+    (\"GBPUSD=X\",\"GBP/USD Rate\",\"Forex\",\"Forex\",\"\
+    GB\"),
+    (\"JPY=X\",\"USD/JPY Rate\",\"Forex\",\"Forex\",\"JP\"),
+    (\"\
+    CADUSD=X\",\"CAD/USD Rate\",\"Forex\",\"Forex\",\"CA\"),
+    (\"AUDUSD=X\",\"\
+    AUD/USD Rate\",\"Forex\",\"Forex\",\"AU\"),
+    (\"CHFUSD=X\",\"CHF/USD Rate\"\
+    ,\"Forex\",\"Forex\",\"CH\"),
+    (\"CNHUSD=X\",\"CNH/USD Rate\",\"Forex\",\"\
+    Forex\",\"CN\"),
+    (\"INRUSD=X\",\"INR/USD Rate\",\"Forex\",\"Forex\",\"IN\"\
+    ),
+    (\"BRLUSD=X\",\"BRL/USD Rate\",\"Forex\",\"Forex\",\"BR\"),
+    (\"KRWUSD=X\"\
+    ,\"KRW/USD Rate\",\"Forex\",\"Forex\",\"KR\"),
+    # ─── Global Indexes ───────────────────────────────────────────────
+\
+    \    (\"^GSPC\",\"S&P 500 Index\",\"INDEX\",\"Index\",\"US\"),
+    (\"^IXIC\"\
+    ,\"NASDAQ Composite\",\"INDEX\",\"Index\",\"US\"),
+    (\"^DJI\",\"Dow Jones\
+    \ Industrial Average\",\"INDEX\",\"Index\",\"US\"),
+    (\"^RUT\",\"Russell 2000\
+    \ Index\",\"INDEX\",\"Index\",\"US\"),
+    (\"^TA35.TA\",\"TA-35 Index\",\"INDEX\"\
+    ,\"Index\",\"IL\"),
+    (\"^TA125.TA\",\"TA-125 Index\",\"INDEX\",\"Index\",\"\
+    IL\"),
+    (\"^TA90.TA\",\"TA-90 Index\",\"INDEX\",\"Index\",\"IL\"),
+    (\"\
+    ^FTSE\",\"FTSE 100 Index\",\"INDEX\",\"Index\",\"GB\"),
+    (\"^GDAXI\",\"DAX\
+    \ 40 Index\",\"INDEX\",\"Index\",\"DE\"),
+    (\"^FCHI\",\"CAC 40 Index\",\"\
+    INDEX\",\"Index\",\"FR\"),
+    (\"^N225\",\"Nikkei 225\",\"INDEX\",\"Index\"\
+    ,\"JP\"),
+    (\"^HSI\",\"Hang Seng Index\",\"INDEX\",\"Index\",\"HK\"),
+  \
+    \  (\"^STOXX50E\",\"EURO STOXX 50\",\"INDEX\",\"Index\",\"EU\"),
+    (\"^BSESN\"\
+    ,\"BSE SENSEX\",\"INDEX\",\"Index\",\"IN\"),
+    (\"^KS11\",\"KOSPI Index\",\"\
+    INDEX\",\"Index\",\"KR\"),
+    (\"^AXJO\",\"ASX 200\",\"INDEX\",\"Index\",\"\
+    AU\"),
+    (\"^BVSP\",\"Bovespa Index\",\"INDEX\",\"Index\",\"BR\"),
+    (\"\
+    ^AEX\",\"AEX Amsterdam Index\",\"INDEX\",\"Index\",\"NL\"),
+    (\"^SSMI\",\"\
+    Swiss Market Index\",\"INDEX\",\"Index\",\"CH\"),
+    (\"^IBEX\",\"IBEX 35\"\
+    ,\"INDEX\",\"Index\",\"ES\"),
+    (\"^MXX\",\"IPC Mexico\",\"INDEX\",\"Index\"\
+    ,\"MX\"),
+    (\"^AORD\",\"All Ordinaries Australia\",\"INDEX\",\"Index\",\"\
+    AU\"),
+    (\"^STI\",\"Straits Times Index\",\"INDEX\",\"Index\",\"SG\"),
+ \
+    \   (\"^NSEI\",\"Nifty 50\",\"INDEX\",\"Index\",\"IN\"),
+    # ─── Sector & Broad\
+    \ ETFs ──────────────────────────────────────────
+    (\"VTI\",\"Vanguard Total\
+    \ Market ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"VOO\",\"Vanguard S&P 500 ETF\"\
+    ,\"NYSE\",\"ETF\",\"US\"),
+    (\"VEA\",\"Vanguard Dev Markets ETF\",\"NYSE\"\
+    ,\"ETF\",\"US\"),
+    (\"VWO\",\"Vanguard Emerging Mkts ETF\",\"NYSE\",\"ETF\"\
+    ,\"US\"),
+    (\"EEM\",\"iShares MSCI Emerging Mkts\",\"NYSE\",\"ETF\",\"US\"\
+    ),
+    (\"EWJ\",\"iShares MSCI Japan ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"\
+    EWZ\",\"iShares MSCI Brazil ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"FXI\",\"iShares\
+    \ China Large-Cap\",\"NYSE\",\"ETF\",\"CN\"),
+    (\"KWEB\",\"KraneShares CSI\
+    \ China Internet\",\"NYSE\",\"ETF\",\"CN\"),
+    (\"EWG\",\"iShares MSCI Germany\
+    \ ETF\",\"NYSE\",\"ETF\",\"DE\"),
+    (\"EWU\",\"iShares MSCI United Kingdom\"\
+    ,\"NYSE\",\"ETF\",\"GB\"),
+    (\"EWY\",\"iShares MSCI South Korea\",\"NYSE\"\
+    ,\"ETF\",\"KR\"),
+    (\"EWA\",\"iShares MSCI Australia ETF\",\"NYSE\",\"ETF\"\
+    ,\"AU\"),
+    (\"XLF\",\"Financial Select Sector SPDR\",\"NYSE\",\"ETF\",\"US\"\
+    ),
+    (\"XLK\",\"Technology Select Sector SPDR\",\"NYSE\",\"ETF\",\"US\"),
+\
+    \    (\"XLV\",\"Health Care Select Sector SPDR\",\"NYSE\",\"ETF\",\"US\"),
+ \
+    \   (\"XLE\",\"Energy Select Sector SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"\
+    XLY\",\"Consumer Discret Select SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XLP\"\
+    ,\"Consumer Staples Select SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XLI\",\"Industrial\
+    \ Select Sector SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XLB\",\"Materials Select\
+    \ Sector SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XLRE\",\"Real Estate Select\
+    \ Sector SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XLU\",\"Utilities Select Sector\
+    \ SPDR\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XLC\",\"Communication Services SPDR\"\
+    ,\"NYSE\",\"ETF\",\"US\"),
+    (\"ARKK\",\"ARK Innovation ETF\",\"NYSE\",\"ETF\"\
+    ,\"US\"),
+    (\"ARKG\",\"ARK Genomic Revolution ETF\",\"NYSE\",\"ETF\",\"US\"\
+    ),
+    (\"IBB\",\"iShares Nasdaq Biotechnology\",\"NASDAQ\",\"ETF\",\"US\"),
+\
+    \    (\"XBI\",\"SPDR S&P Biotech ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"SOXX\"\
+    ,\"iShares Semiconductor ETF\",\"NASDAQ\",\"ETF\",\"US\"),
+    (\"SMH\",\"VanEck\
+    \ Semiconductor ETF\",\"NASDAQ\",\"ETF\",\"US\"),
+    (\"GDX\",\"VanEck Gold\
+    \ Miners ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"GDXJ\",\"VanEck Junior Gold Miners\"\
+    ,\"NYSE\",\"ETF\",\"US\"),
+    (\"VNQ\",\"Vanguard Real Estate ETF\",\"NYSE\"\
+    ,\"ETF\",\"US\"),
+    (\"TAN\",\"Invesco Solar ETF\",\"NYSE\",\"ETF\",\"US\"\
+    ),
+    (\"ICLN\",\"iShares Global Clean Energy\",\"NASDAQ\",\"ETF\",\"US\"),
+\
+    \    (\"HYG\",\"iShares iBoxx High Yield Corp\",\"NYSE\",\"ETF\",\"US\"),
+  \
+    \  (\"LQD\",\"iShares iBoxx Invest Grade\",\"NYSE\",\"ETF\",\"US\"),
+    (\"\
+    AGG\",\"iShares Core US Aggregate Bond\",\"NYSE\",\"ETF\",\"US\"),
+    (\"IEF\"\
+    ,\"iShares 7-10 Year Treasury\",\"NASDAQ\",\"ETF\",\"US\"),
+    (\"BIL\",\"SPDR\
+    \ 1-3 Month T-Bill ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"TIPS\",\"iShares TIPS\
+    \ Bond ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"IAU\",\"iShares Gold Trust\",\"\
+    NYSE\",\"ETF\",\"US\"),
+    (\"PDBC\",\"Invesco Optimum Yield Commodity\",\"\
+    NASDAQ\",\"ETF\",\"US\"),
+    (\"IWF\",\"iShares Russell 1000 Growth\",\"NYSE\"\
+    ,\"ETF\",\"US\"),
+    (\"IWD\",\"iShares Russell 1000 Value\",\"NYSE\",\"ETF\"\
+    ,\"US\"),
+    (\"MDY\",\"SPDR S&P MidCap 400 ETF\",\"NYSE\",\"ETF\",\"US\"),
+\
+    \    (\"OIH\",\"VanEck Oil Services ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"XOP\"\
+    ,\"SPDR S&P Oil & Gas ETF\",\"NYSE\",\"ETF\",\"US\"),
+    (\"CIBR\",\"First Trust\
+    \ Cybersecurity ETF\",\"NASDAQ\",\"ETF\",\"US\"),
+    (\"HACK\",\"ETFMG Prime\
+    \ Cyber Security ETF\",\"NYSE\",\"ETF\",\"US\"),
+    # ─── Financials ───────────────────────────────────────────────────
+\
+    \    (\"BRK-B\",\"Berkshire Hathaway Class B\",\"NYSE\",\"Financial\",\"US\"),
+\
+    \    (\"USB\",\"US Bancorp\",\"NYSE\",\"Financial\",\"US\"),
+    (\"PNC\",\"\
+    PNC Financial Services\",\"NYSE\",\"Financial\",\"US\"),
+    (\"TFC\",\"Truist\
+    \ Financial Corp\",\"NYSE\",\"Financial\",\"US\"),
+    (\"COF\",\"Capital One\
+    \ Financial\",\"NYSE\",\"Financial\",\"US\"),
+    (\"KEY\",\"KeyCorp\",\"NYSE\"\
+    ,\"Financial\",\"US\"),
+    (\"RF\",\"Regions Financial Corp\",\"NYSE\",\"Financial\"\
+    ,\"US\"),
+    (\"FITB\",\"Fifth Third Bancorp\",\"NASDAQ\",\"Financial\",\"US\"\
+    ),
+    (\"HBAN\",\"Huntington Bancshares\",\"NASDAQ\",\"Financial\",\"US\"),
+\
+    \    (\"CFG\",\"Citizens Financial Group\",\"NYSE\",\"Financial\",\"US\"),
+ \
+    \   (\"MTB\",\"M&T Bank Corp\",\"NYSE\",\"Financial\",\"US\"),
+    (\"ZION\"\
+    ,\"Zions Bancorporation\",\"NASDAQ\",\"Financial\",\"US\"),
+    (\"FHN\",\"First\
+    \ Horizon National\",\"NYSE\",\"Financial\",\"US\"),
+    (\"CB\",\"Chubb Limited\"\
+    ,\"NYSE\",\"Financial\",\"CH\"),
+    (\"AON\",\"Aon plc\",\"NYSE\",\"Financial\"\
+    ,\"IE\"),
+    (\"MMC\",\"Marsh & McLennan Companies\",\"NYSE\",\"Financial\"\
+    ,\"US\"),
+    (\"TRV\",\"Travelers Companies Inc\",\"NYSE\",\"Financial\",\"\
+    US\"),
+    (\"PGR\",\"Progressive Corporation\",\"NYSE\",\"Financial\",\"US\"\
+    ),
+    (\"AFL\",\"Aflac Incorporated\",\"NYSE\",\"Financial\",\"US\"),
+    (\"\
+    AIG\",\"American International Group\",\"NYSE\",\"Financial\",\"US\"),
+    (\"\
+    MET\",\"MetLife Inc\",\"NYSE\",\"Financial\",\"US\"),
+    (\"PRU\",\"Prudential\
+    \ Financial Inc\",\"NYSE\",\"Financial\",\"US\"),
+    (\"HIG\",\"Hartford Financial\
+    \ Services\",\"NYSE\",\"Financial\",\"US\"),
+    (\"ALL\",\"Allstate Corporation\"\
+    ,\"NYSE\",\"Financial\",\"US\"),
+    (\"LNC\",\"Lincoln National Corp\",\"NYSE\"\
+    ,\"Financial\",\"US\"),
+    (\"ICE\",\"Intercontinental Exchange\",\"NYSE\",\"\
+    Financial\",\"US\"),
+    (\"SPGI\",\"S&P Global Inc\",\"NYSE\",\"Financial\"\
+    ,\"US\"),
+    (\"MCO\",\"Moody's Corporation\",\"NYSE\",\"Financial\",\"US\"\
+    ),
+    (\"WTW\",\"Willis Towers Watson\",\"NASDAQ\",\"Financial\",\"IE\"),
+\
+    \    (\"FDS\",\"FactSet Research Systems\",\"NASDAQ\",\"Financial\",\"US\"),
+\
+    \    (\"VRSK\",\"Verisk Analytics Inc\",\"NASDAQ\",\"Financial\",\"US\"),
+  \
+    \  (\"IBKR\",\"Interactive Brokers Group\",\"NASDAQ\",\"Financial\",\"US\"),
+\
+    \    (\"RJF\",\"Raymond James Financial\",\"NYSE\",\"Financial\",\"US\"),
+  \
+    \  (\"CINF\",\"Cincinnati Financial Corp\",\"NASDAQ\",\"Financial\",\"US\"),
+\
+    \    (\"HRB\",\"H&R Block Inc\",\"NYSE\",\"Financial\",\"US\"),
+    # ─── Healthcare\
+    \ ───────────────────────────────────────────────────
+    (\"TMO\",\"Thermo Fisher\
+    \ Scientific\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"DHR\",\"Danaher Corporation\"\
+    ,\"NYSE\",\"Healthcare\",\"US\"),
+    (\"ABT\",\"Abbott Laboratories\",\"NYSE\"\
+    ,\"Healthcare\",\"US\"),
+    (\"MDT\",\"Medtronic plc\",\"NYSE\",\"Healthcare\"\
+    ,\"IE\"),
+    (\"SYK\",\"Stryker Corporation\",\"NYSE\",\"Healthcare\",\"US\"\
+    ),
+    (\"BSX\",\"Boston Scientific Corp\",\"NYSE\",\"Healthcare\",\"US\"),
+\
+    \    (\"EW\",\"Edwards Lifesciences\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"\
+    HCA\",\"HCA Healthcare Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"CVS\",\"\
+    CVS Health Corporation\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"CI\",\"Cigna\
+    \ Group\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"HUM\",\"Humana Inc\",\"NYSE\"\
+    ,\"Healthcare\",\"US\"),
+    (\"MCK\",\"McKesson Corporation\",\"NYSE\",\"Healthcare\"\
+    ,\"US\"),
+    (\"ABC\",\"Cencora Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+   \
+    \ (\"CAH\",\"Cardinal Health Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"BAX\"\
+    ,\"Baxter International Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"BDX\",\"\
+    Becton Dickinson and Co\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"ZBH\",\"Zimmer\
+    \ Biomet Holdings\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"HOLX\",\"Hologic\
+    \ Inc\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"RMD\",\"ResMed Inc\",\"NYSE\"\
+    ,\"Healthcare\",\"US\"),
+    (\"ALGN\",\"Align Technology Inc\",\"NASDAQ\",\"\
+    Healthcare\",\"US\"),
+    (\"PODD\",\"Insulet Corporation\",\"NASDAQ\",\"Healthcare\"\
+    ,\"US\"),
+    (\"NVCR\",\"NovoCure Limited\",\"NASDAQ\",\"Healthcare\",\"US\"\
+    ),
+    (\"INSP\",\"Inspire Medical Systems\",\"NYSE\",\"Healthcare\",\"US\"),
+\
+    \    (\"IRTC\",\"iRhythm Technologies\",\"NASDAQ\",\"Healthcare\",\"US\"),
+ \
+    \   (\"EXAS\",\"Exact Sciences Corp\",\"NASDAQ\",\"Healthcare\",\"US\"),
+   \
+    \ (\"GEHC\",\"GE HealthCare Technologies\",\"NASDAQ\",\"Healthcare\",\"US\"),
+\
+    \    (\"MOH\",\"Molina Healthcare Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+   \
+    \ (\"CNC\",\"Centene Corporation\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"ELV\"\
+    ,\"Elevance Health Inc\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"SEM\",\"Select\
+    \ Medical Holdings\",\"NYSE\",\"Healthcare\",\"US\"),
+    (\"AMED\",\"Amedisys\
+    \ Inc\",\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"ACAD\",\"ACADIA Pharmaceuticals\"\
+    ,\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"ARWR\",\"Arrowhead Pharmaceuticals\"\
+    ,\"NASDAQ\",\"Healthcare\",\"US\"),
+    (\"BEAM\",\"Beam Therapeutics\",\"NASDAQ\"\
+    ,\"Healthcare\",\"US\"),
+    (\"CRSP\",\"CRISPR Therapeutics\",\"NASDAQ\",\"\
+    Healthcare\",\"CH\"),
+    (\"EDIT\",\"Editas Medicine Inc\",\"NASDAQ\",\"Healthcare\"\
+    ,\"US\"),
+    (\"NTLA\",\"Intellia Therapeutics\",\"NASDAQ\",\"Healthcare\",\"\
+    US\"),
+    (\"RARE\",\"Ultragenyx Pharmaceutical\",\"NASDAQ\",\"Healthcare\"\
+    ,\"US\"),
+    # ─── Consumer Staples ─────────────────────────────────────────────
+\
+    \    (\"PG\",\"Procter & Gamble Company\",\"NYSE\",\"Consumer Defensive\",\"US\"\
+    ),
+    (\"CL\",\"Colgate-Palmolive Company\",\"NYSE\",\"Consumer Defensive\"\
+    ,\"US\"),
+    (\"KMB\",\"Kimberly-Clark Corporation\",\"NYSE\",\"Consumer Defensive\"\
+    ,\"US\"),
+    (\"EL\",\"Estee Lauder Companies\",\"NYSE\",\"Consumer Defensive\"\
+    ,\"US\"),
+    (\"MDLZ\",\"Mondelez International\",\"NASDAQ\",\"Consumer Defensive\"\
+    ,\"US\"),
+    (\"GIS\",\"General Mills Inc\",\"NYSE\",\"Consumer Defensive\"\
+    ,\"US\"),
+    (\"K\",\"Kellanova\",\"NYSE\",\"Consumer Defensive\",\"US\"),
+\
+    \    (\"CPB\",\"Campbell Soup Company\",\"NYSE\",\"Consumer Defensive\",\"US\"\
+    ),
+    (\"HSY\",\"Hershey Company\",\"NYSE\",\"Consumer Defensive\",\"US\"),
+\
+    \    (\"MKC\",\"McCormick & Company\",\"NYSE\",\"Consumer Defensive\",\"US\"),
+\
+    \    (\"HRL\",\"Hormel Foods Corporation\",\"NYSE\",\"Consumer Defensive\",\"\
+    US\"),
+    (\"TSN\",\"Tyson Foods Inc\",\"NYSE\",\"Consumer Defensive\",\"US\"\
+    ),
+    (\"CAG\",\"ConAgra Brands Inc\",\"NYSE\",\"Consumer Defensive\",\"US\"\
+    ),
+    (\"SJM\",\"J.M. Smucker Company\",\"NYSE\",\"Consumer Defensive\",\"US\"\
+    ),
+    (\"MO\",\"Altria Group Inc\",\"NYSE\",\"Consumer Defensive\",\"US\"),
+\
+    \    (\"PM\",\"Philip Morris International\",\"NYSE\",\"Consumer Defensive\",\"\
+    US\"),
+    (\"BTI\",\"British American Tobacco\",\"NYSE\",\"Consumer Defensive\"\
+    ,\"GB\"),
+    (\"STZ\",\"Constellation Brands Inc\",\"NYSE\",\"Consumer Defensive\"\
+    ,\"US\"),
+    (\"MNST\",\"Monster Beverage Corporation\",\"NASDAQ\",\"Consumer\
+    \ Defensive\",\"US\"),
+    (\"TAP\",\"Molson Coors Beverage Co\",\"NYSE\",\"\
+    Consumer Defensive\",\"US\"),
+    (\"SYY\",\"Sysco Corporation\",\"NYSE\",\"\
+    Consumer Defensive\",\"US\"),
+    (\"DG\",\"Dollar General Corporation\",\"NYSE\"\
+    ,\"Consumer Defensive\",\"US\"),
+    (\"DLTR\",\"Dollar Tree Inc\",\"NASDAQ\"\
+    ,\"Consumer Defensive\",\"US\"),
+    (\"KR\",\"Kroger Company\",\"NYSE\",\"Consumer\
+    \ Defensive\",\"US\"),
+    (\"CELH\",\"Celsius Holdings Inc\",\"NASDAQ\",\"Consumer\
+    \ Defensive\",\"US\"),
+    (\"BJ\",\"BJ's Wholesale Club Holdings\",\"NYSE\"\
+    ,\"Consumer Defensive\",\"US\"),
+    (\"PFGC\",\"Performance Food Group\",\"\
+    NYSE\",\"Consumer Defensive\",\"US\"),
+    (\"USFD\",\"US Foods Holding Corp\"\
+    ,\"NYSE\",\"Consumer Defensive\",\"US\"),
+    # ─── Consumer Cyclical ────────────────────────────────────────────
+\
+    \    (\"F\",\"Ford Motor Company\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+ \
+    \   (\"GM\",\"General Motors Company\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+\
+    \    (\"STLA\",\"Stellantis N.V.\",\"NYSE\",\"Consumer Cyclical\",\"NL\"),
+ \
+    \   (\"TM\",\"Toyota Motor Corporation\",\"NYSE\",\"Consumer Cyclical\",\"JP\"\
+    ),
+    (\"HMC\",\"Honda Motor Co Ltd\",\"NYSE\",\"Consumer Cyclical\",\"JP\"\
+    ),
+    (\"BMWYY\",\"BMW Group ADR\",\"OTC\",\"Consumer Cyclical\",\"DE\"),
+\
+    \    (\"VWAGY\",\"Volkswagen AG ADR\",\"OTC\",\"Consumer Cyclical\",\"DE\"),
+\
+    \    (\"LI\",\"Li Auto Inc\",\"NASDAQ\",\"Consumer Cyclical\",\"CN\"),
+    (\"\
+    NIO\",\"NIO Inc\",\"NYSE\",\"Consumer Cyclical\",\"CN\"),
+    (\"XPEV\",\"XPeng\
+    \ Inc\",\"NYSE\",\"Consumer Cyclical\",\"CN\"),
+    (\"TJX\",\"TJX Companies\
+    \ Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"BURL\",\"Burlington Stores\
+    \ Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"FIVE\",\"Five Below Inc\"\
+    ,\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"AZO\",\"AutoZone Inc\",\"NYSE\"\
+    ,\"Consumer Cyclical\",\"US\"),
+    (\"ORLY\",\"O'Reilly Automotive Inc\",\"\
+    NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"AAP\",\"Advance Auto Parts Inc\"\
+    ,\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"KSS\",\"Kohl's Corporation\"\
+    ,\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"M\",\"Macy's Inc\",\"NYSE\",\"\
+    Consumer Cyclical\",\"US\"),
+    (\"ANF\",\"Abercrombie & Fitch Co\",\"NYSE\"\
+    ,\"Consumer Cyclical\",\"US\"),
+    (\"PVH\",\"PVH Corp\",\"NYSE\",\"Consumer\
+    \ Cyclical\",\"US\"),
+    (\"RL\",\"Ralph Lauren Corporation\",\"NYSE\",\"Consumer\
+    \ Cyclical\",\"US\"),
+    (\"VFC\",\"VF Corporation\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"PHM\",\"PulteGroup Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"\
+    ),
+    (\"DHI\",\"D.R. Horton Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+\
+    \    (\"LEN\",\"Lennar Corporation\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+\
+    \    (\"TOL\",\"Toll Brothers Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+\
+    \    (\"NVR\",\"NVR Inc\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"KBH\"\
+    ,\"KB Home\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"CCL\",\"Carnival\
+    \ Corporation\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"RCL\",\"Royal\
+    \ Caribbean Group\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+    (\"NCLH\",\"\
+    Norwegian Cruise Line Holdings\",\"NYSE\",\"Consumer Cyclical\",\"US\"),
+   \
+    \ (\"MAR\",\"Marriott International\",\"NASDAQ\",\"Consumer Cyclical\",\"US\"\
+    ),
+    (\"HLT\",\"Hilton Worldwide Holdings\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"H\",\"Hyatt Hotels Corporation\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"WYNN\",\"Wynn Resorts Limited\",\"NASDAQ\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"MGM\",\"MGM Resorts International\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"LVS\",\"Las Vegas Sands Corp\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"CZR\",\"Caesars Entertainment Inc\",\"NASDAQ\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"PENN\",\"Penn Entertainment Inc\",\"NASDAQ\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"YUM\",\"Yum! Brands Inc\",\"NYSE\",\"Consumer Cyclical\",\"\
+    US\"),
+    (\"QSR\",\"Restaurant Brands Intl\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"CA\"),
+    (\"DPZ\",\"Domino's Pizza Inc\",\"NASDAQ\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"CMG\",\"Chipotle Mexican Grill\",\"NYSE\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"BJRI\",\"BJ's Restaurants Inc\",\"NASDAQ\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    (\"SFM\",\"Sprouts Farmers Market\",\"NASDAQ\",\"Consumer Cyclical\"\
+    ,\"US\"),
+    # ─── Industrials ──────────────────────────────────────────────────
+\
+    \    (\"UNP\",\"Union Pacific Corporation\",\"NYSE\",\"Industrials\",\"US\"),
+\
+    \    (\"CSX\",\"CSX Corporation\",\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"\
+    NSC\",\"Norfolk Southern Corp\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"CP\"\
+    ,\"Canadian Pacific Kansas City\",\"NYSE\",\"Industrials\",\"CA\"),
+    (\"CNI\"\
+    ,\"Canadian National Railway\",\"NYSE\",\"Industrials\",\"CA\"),
+    (\"EMR\"\
+    ,\"Emerson Electric Co\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"ETN\",\"Eaton\
+    \ Corporation plc\",\"NYSE\",\"Industrials\",\"IE\"),
+    (\"PH\",\"Parker-Hannifin\
+    \ Corporation\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"ROK\",\"Rockwell Automation\
+    \ Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"AME\",\"AMETEK Inc\",\"NYSE\"\
+    ,\"Industrials\",\"US\"),
+    (\"ITW\",\"Illinois Tool Works Inc\",\"NASDAQ\"\
+    ,\"Industrials\",\"US\"),
+    (\"CMI\",\"Cummins Inc\",\"NYSE\",\"Industrials\"\
+    ,\"US\"),
+    (\"MMM\",\"3M Company\",\"NYSE\",\"Industrials\",\"US\"),
+   \
+    \ (\"GD\",\"General Dynamics Corp\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"\
+    HII\",\"Huntington Ingalls Industries\",\"NYSE\",\"Industrials\",\"US\"),
+  \
+    \  (\"TXT\",\"Textron Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"HWM\",\"\
+    Howmet Aerospace Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"LHX\",\"L3Harris\
+    \ Technologies Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"LDOS\",\"Leidos\
+    \ Holdings Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"BAH\",\"Booz Allen\
+    \ Hamilton Holding\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"SAIC\",\"Science\
+    \ Applications Intl\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"AXON\",\"Axon\
+    \ Enterprise Inc\",\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"WM\",\"Waste Management\
+    \ Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"RSG\",\"Republic Services Inc\"\
+    ,\"NYSE\",\"Industrials\",\"US\"),
+    (\"CLH\",\"Clean Harbors Inc\",\"NYSE\"\
+    ,\"Industrials\",\"US\"),
+    (\"WCN\",\"Waste Connections Inc\",\"NYSE\",\"\
+    Industrials\",\"CA\"),
+    (\"FAST\",\"Fastenal Company\",\"NASDAQ\",\"Industrials\"\
+    ,\"US\"),
+    (\"GWW\",\"W.W. Grainger Inc\",\"NYSE\",\"Industrials\",\"US\"\
+    ),
+    (\"TT\",\"Trane Technologies plc\",\"NYSE\",\"Industrials\",\"IE\"),
+\
+    \    (\"CARR\",\"Carrier Global Corporation\",\"NYSE\",\"Industrials\",\"US\"\
+    ),
+    (\"OTIS\",\"Otis Worldwide Corporation\",\"NYSE\",\"Industrials\",\"US\"\
+    ),
+    (\"JCI\",\"Johnson Controls International\",\"NYSE\",\"Industrials\",\"\
+    IE\"),
+    (\"PCAR\",\"PACCAR Inc\",\"NASDAQ\",\"Industrials\",\"US\"),
+   \
+    \ (\"DE\",\"Deere & Company\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"AGCO\"\
+    ,\"AGCO Corporation\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"TDG\",\"TransDigm\
+    \ Group Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"CHRW\",\"C.H. Robinson\
+    \ Worldwide\",\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"EXPD\",\"Expeditors\
+    \ International\",\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"XPO\",\"XPO Inc\"\
+    ,\"NYSE\",\"Industrials\",\"US\"),
+    (\"ODFL\",\"Old Dominion Freight Line\"\
+    ,\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"JBHT\",\"J.B. Hunt Transport Services\"\
+    ,\"NASDAQ\",\"Industrials\",\"US\"),
+    (\"DAL\",\"Delta Air Lines Inc\",\"\
+    NYSE\",\"Industrials\",\"US\"),
+    (\"UAL\",\"United Airlines Holdings\",\"\
+    NASDAQ\",\"Industrials\",\"US\"),
+    (\"AAL\",\"American Airlines Group\",\"\
+    NASDAQ\",\"Industrials\",\"US\"),
+    (\"LUV\",\"Southwest Airlines Co\",\"NYSE\"\
+    ,\"Industrials\",\"US\"),
+    (\"ALK\",\"Alaska Air Group Inc\",\"NYSE\",\"Industrials\"\
+    ,\"US\"),
+    (\"JBLU\",\"JetBlue Airways Corp\",\"NASDAQ\",\"Industrials\",\"\
+    US\"),
+    (\"SAVE\",\"Spirit Airlines Inc\",\"NYSE\",\"Industrials\",\"US\"\
+    ),
+    (\"FLR\",\"Fluor Corporation\",\"NYSE\",\"Industrials\",\"US\"),
+   \
+    \ (\"J\",\"Jacobs Solutions Inc\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"ACM\"\
+    ,\"AECOM\",\"NYSE\",\"Industrials\",\"US\"),
+    (\"PWR\",\"Quanta Services Inc\"\
+    ,\"NYSE\",\"Industrials\",\"US\"),
+    (\"MTZ\",\"MasTec Inc\",\"NYSE\",\"Industrials\"\
+    ,\"US\"),
+    (\"ROLL\",\"RBC Bearings Inc\",\"NASDAQ\",\"Industrials\",\"US\"\
+    ),
+    (\"GNRC\",\"Generac Holdings Inc\",\"NYSE\",\"Industrials\",\"US\"),
+\
+    \    (\"AWI\",\"Armstrong World Industries\",\"NYSE\",\"Industrials\",\"US\"),
+\
+    \    # ─── Energy ───────────────────────────────────────────────────────
+  \
+    \  (\"OXY\",\"Occidental Petroleum Corp\",\"NYSE\",\"Energy\",\"US\"),
+    (\"\
+    VLO\",\"Valero Energy Corporation\",\"NYSE\",\"Energy\",\"US\"),
+    (\"MPC\"\
+    ,\"Marathon Petroleum Corp\",\"NYSE\",\"Energy\",\"US\"),
+    (\"PSX\",\"Phillips\
+    \ 66\",\"NYSE\",\"Energy\",\"US\"),
+    (\"HES\",\"Hess Corporation\",\"NYSE\"\
+    ,\"Energy\",\"US\"),
+    (\"DVN\",\"Devon Energy Corporation\",\"NYSE\",\"Energy\"\
+    ,\"US\"),
+    (\"FANG\",\"Diamondback Energy Inc\",\"NASDAQ\",\"Energy\",\"US\"\
+    ),
+    (\"MRO\",\"Marathon Oil Corporation\",\"NYSE\",\"Energy\",\"US\"),
+ \
+    \   (\"APA\",\"APA Corporation\",\"NASDAQ\",\"Energy\",\"US\"),
+    (\"HAL\"\
+    ,\"Halliburton Company\",\"NYSE\",\"Energy\",\"US\"),
+    (\"BKR\",\"Baker Hughes\
+    \ Company\",\"NASDAQ\",\"Energy\",\"US\"),
+    (\"OKE\",\"ONEOK Inc\",\"NYSE\"\
+    ,\"Energy\",\"US\"),
+    (\"KMI\",\"Kinder Morgan Inc\",\"NYSE\",\"Energy\",\"\
+    US\"),
+    (\"WMB\",\"Williams Companies Inc\",\"NYSE\",\"Energy\",\"US\"),
+\
+    \    (\"LNG\",\"Cheniere Energy Inc\",\"NYSE\",\"Energy\",\"US\"),
+    (\"OVV\"\
+    ,\"Ovintiv Inc\",\"NYSE\",\"Energy\",\"CA\"),
+    (\"CTRA\",\"Coterra Energy\
+    \ Inc\",\"NYSE\",\"Energy\",\"US\"),
+    (\"SM\",\"SM Energy Company\",\"NYSE\"\
+    ,\"Energy\",\"US\"),
+    (\"CNX\",\"CNX Resources Corp\",\"NYSE\",\"Energy\"\
+    ,\"US\"),
+    (\"AR\",\"Antero Resources Corp\",\"NYSE\",\"Energy\",\"US\"),
+\
+    \    (\"EQT\",\"EQT Corporation\",\"NYSE\",\"Energy\",\"US\"),
+    (\"SWN\",\"\
+    SWN Communities\",\"NYSE\",\"Energy\",\"US\"),
+    (\"RRC\",\"Range Resources\
+    \ Corp\",\"NYSE\",\"Energy\",\"US\"),
+    (\"MTDR\",\"Matador Resources Co\"\
+    ,\"NYSE\",\"Energy\",\"US\"),
+    (\"CHRD\",\"Chord Energy Corp\",\"NASDAQ\"\
+    ,\"Energy\",\"US\"),
+    # ─── Utilities ────────────────────────────────────────────────────
+\
+    \    (\"DUK\",\"Duke Energy Corporation\",\"NYSE\",\"Utilities\",\"US\"),
+  \
+    \  (\"SO\",\"Southern Company\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"D\",\"\
+    Dominion Energy Inc\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"AEP\",\"American\
+    \ Electric Power\",\"NASDAQ\",\"Utilities\",\"US\"),
+    (\"EXC\",\"Exelon Corporation\"\
+    ,\"NASDAQ\",\"Utilities\",\"US\"),
+    (\"XEL\",\"Xcel Energy Inc\",\"NASDAQ\"\
+    ,\"Utilities\",\"US\"),
+    (\"ETR\",\"Entergy Corporation\",\"NYSE\",\"Utilities\"\
+    ,\"US\"),
+    (\"EIX\",\"Edison International\",\"NYSE\",\"Utilities\",\"US\"\
+    ),
+    (\"AWK\",\"American Water Works\",\"NYSE\",\"Utilities\",\"US\"),
+  \
+    \  (\"SRE\",\"Sempra Energy\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"PCG\",\"\
+    PG&E Corporation\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"WEC\",\"WEC Energy\
+    \ Group Inc\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"DTE\",\"DTE Energy Company\"\
+    ,\"NYSE\",\"Utilities\",\"US\"),
+    (\"AES\",\"AES Corporation\",\"NYSE\",\"\
+    Utilities\",\"US\"),
+    (\"CNP\",\"CenterPoint Energy Inc\",\"NYSE\",\"Utilities\"\
+    ,\"US\"),
+    (\"NRG\",\"NRG Energy Inc\",\"NYSE\",\"Utilities\",\"US\"),
+ \
+    \   (\"CEG\",\"Constellation Energy Corp\",\"NASDAQ\",\"Utilities\",\"US\"),
+\
+    \    (\"VST\",\"Vistra Corp\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"PPL\",\"\
+    PPL Corporation\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"FE\",\"FirstEnergy Corp\"\
+    ,\"NYSE\",\"Utilities\",\"US\"),
+    (\"ES\",\"Eversource Energy\",\"NYSE\",\"\
+    Utilities\",\"US\"),
+    (\"CMS\",\"CMS Energy Corporation\",\"NYSE\",\"Utilities\"\
+    ,\"US\"),
+    (\"EVRG\",\"Evergy Inc\",\"NASDAQ\",\"Utilities\",\"US\"),
+  \
+    \  (\"OGE\",\"OGE Energy Corp\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"NI\",\"\
+    NiSource Inc\",\"NYSE\",\"Utilities\",\"US\"),
+    (\"UGI\",\"UGI Corporation\"\
+    ,\"NYSE\",\"Utilities\",\"US\"),
+    # ─── Materials ────────────────────────────────────────────────────
+\
+    \    (\"LIN\",\"Linde plc\",\"NASDAQ\",\"Materials\",\"IE\"),
+    (\"APD\",\"\
+    Air Products and Chemicals\",\"NASDAQ\",\"Materials\",\"US\"),
+    (\"ECL\",\"\
+    Ecolab Inc\",\"NYSE\",\"Materials\",\"US\"),
+    (\"SHW\",\"Sherwin-Williams\
+    \ Company\",\"NYSE\",\"Materials\",\"US\"),
+    (\"PPG\",\"PPG Industries Inc\"\
+    ,\"NYSE\",\"Materials\",\"US\"),
+    (\"NEM\",\"Newmont Corporation\",\"NYSE\"\
+    ,\"Materials\",\"US\"),
+    (\"FCX\",\"Freeport-McMoRan Inc\",\"NYSE\",\"Materials\"\
+    ,\"US\"),
+    (\"GOLD\",\"Barrick Gold Corporation\",\"NYSE\",\"Materials\",\"\
+    CA\"),
+    (\"AEM\",\"Agnico Eagle Mines Ltd\",\"NYSE\",\"Materials\",\"CA\"\
+    ),
+    (\"WPM\",\"Wheaton Precious Metals\",\"NYSE\",\"Materials\",\"CA\"),
+\
+    \    (\"NUE\",\"Nucor Corporation\",\"NYSE\",\"Materials\",\"US\"),
+    (\"STLD\"\
+    ,\"Steel Dynamics Inc\",\"NASDAQ\",\"Materials\",\"US\"),
+    (\"X\",\"United\
+    \ States Steel Corp\",\"NYSE\",\"Materials\",\"US\"),
+    (\"CLF\",\"Cleveland-Cliffs\
+    \ Inc\",\"NYSE\",\"Materials\",\"US\"),
+    (\"ALB\",\"Albemarle Corporation\"\
+    ,\"NYSE\",\"Materials\",\"US\"),
+    (\"LIVENT\",\"Livent Corp\",\"NYSE\",\"\
+    Materials\",\"US\"),
+    (\"CF\",\"CF Industries Holdings\",\"NYSE\",\"Materials\"\
+    ,\"US\"),
+    (\"MOS\",\"Mosaic Company\",\"NYSE\",\"Materials\",\"US\"),
+ \
+    \   (\"NTR\",\"Nutrien Ltd\",\"NYSE\",\"Materials\",\"CA\"),
+    (\"LYB\",\"\
+    LyondellBasell Industries\",\"NYSE\",\"Materials\",\"NL\"),
+    (\"DOW\",\"Dow\
+    \ Inc\",\"NYSE\",\"Materials\",\"US\"),
+    (\"DD\",\"DuPont de Nemours Inc\"\
+    ,\"NYSE\",\"Materials\",\"US\"),
+    (\"VMC\",\"Vulcan Materials Company\",\"\
+    NYSE\",\"Materials\",\"US\"),
+    (\"MLM\",\"Martin Marietta Materials\",\"NYSE\"\
+    ,\"Materials\",\"US\"),
+    (\"IFF\",\"International Flavors & Fragrances\",\"\
+    NYSE\",\"Materials\",\"US\"),
+    (\"RPM\",\"RPM International Inc\",\"NYSE\"\
+    ,\"Materials\",\"US\"),
+    (\"EMN\",\"Eastman Chemical Company\",\"NYSE\",\"\
+    Materials\",\"US\"),
+    (\"CE\",\"Celanese Corporation\",\"NYSE\",\"Materials\"\
+    ,\"US\"),
+    (\"OLN\",\"Olin Corporation\",\"NYSE\",\"Materials\",\"US\"),
+\
+    \    (\"CC\",\"Chemours Company\",\"NYSE\",\"Materials\",\"US\"),
+    (\"AA\"\
+    ,\"Alcoa Corporation\",\"NYSE\",\"Materials\",\"US\"),
+    (\"CENX\",\"Century\
+    \ Aluminum Company\",\"NASDAQ\",\"Materials\",\"US\"),
+    (\"CMP\",\"Compass\
+    \ Minerals International\",\"NYSE\",\"Materials\",\"US\"),
+    # ─── Telecom\
+    \ / Communication ──────────────────────────────────────
+    (\"T\",\"AT&T Inc\"\
+    ,\"NYSE\",\"Communication\",\"US\"),
+    (\"VZ\",\"Verizon Communications\",\"\
+    NYSE\",\"Communication\",\"US\"),
+    (\"TMUS\",\"T-Mobile US Inc\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    (\"CMCSA\",\"Comcast Corporation\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    (\"CHTR\",\"Charter Communications Inc\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    (\"WBD\",\"Warner Bros Discovery Inc\",\"NASDAQ\"\
+    ,\"Communication\",\"US\"),
+    (\"PARA\",\"Paramount Global\",\"NASDAQ\",\"\
+    Communication\",\"US\"),
+    (\"FOX\",\"Fox Corporation\",\"NASDAQ\",\"Communication\"\
+    ,\"US\"),
+    (\"NYT\",\"New York Times Company\",\"NYSE\",\"Communication\"\
+    ,\"US\"),
+    (\"SIRI\",\"Sirius XM Holdings\",\"NASDAQ\",\"Communication\",\"\
+    US\"),
+    (\"LUMN\",\"Lumen Technologies Inc\",\"NYSE\",\"Communication\",\"\
+    US\"),
+    # ─── Real Estate ──────────────────────────────────────────────────
+\
+    \    (\"O\",\"Realty Income Corporation\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"WELL\",\"Welltower Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"VICI\"\
+    ,\"VICI Properties Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"EQR\",\"Equity\
+    \ Residential\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"PSA\",\"Public Storage\"\
+    ,\"NYSE\",\"Real Estate\",\"US\"),
+    (\"DLR\",\"Digital Realty Trust\",\"NYSE\"\
+    ,\"Real Estate\",\"US\"),
+    (\"EQIX\",\"Equinix Inc\",\"NASDAQ\",\"Real Estate\"\
+    ,\"US\"),
+    (\"CCI\",\"Crown Castle Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"SPG\",\"Simon Property Group Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"EXR\",\"Extra Space Storage Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"AVB\",\"AvalonBay Communities Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"BXP\",\"BXP Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"ARE\",\"Alexandria\
+    \ Real Estate Equities\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"VTR\",\"Ventas\
+    \ Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"PEAK\",\"Healthpeak Properties\
+    \ Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"HST\",\"Host Hotels and Resorts\"\
+    ,\"NASDAQ\",\"Real Estate\",\"US\"),
+    (\"WPC\",\"W.P. Carey Inc\",\"NYSE\"\
+    ,\"Real Estate\",\"US\"),
+    (\"STAG\",\"Stag Industrial Inc\",\"NYSE\",\"Real\
+    \ Estate\",\"US\"),
+    (\"REXR\",\"Rexford Industrial Realty\",\"NYSE\",\"Real\
+    \ Estate\",\"US\"),
+    (\"NNN\",\"NNN REIT Inc\",\"NYSE\",\"Real Estate\",\"\
+    US\"),
+    (\"ADC\",\"Agree Realty Corporation\",\"NYSE\",\"Real Estate\",\"\
+    US\"),
+    (\"LTC\",\"LTC Properties Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"OHI\",\"Omega Healthcare Investors\",\"NYSE\",\"Real Estate\",\"US\"),
+\
+    \    (\"CUBE\",\"CubeSmart\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"LSI\",\"\
+    Life Storage Inc\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"NSA\",\"National\
+    \ Storage Affiliates\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"ESS\",\"Essex\
+    \ Property Trust\",\"NYSE\",\"Real Estate\",\"US\"),
+    (\"UDR\",\"UDR Inc\"\
+    ,\"NYSE\",\"Real Estate\",\"US\"),
+    (\"MAA\",\"Mid-America Apartment Communities\"\
+    ,\"NYSE\",\"Real Estate\",\"US\"),
+    (\"CPT\",\"Camden Property Trust\",\"\
+    NYSE\",\"Real Estate\",\"US\"),
+    # ─── More Technology ──────────────────────────────────────────────
+\
+    \    (\"PAYX\",\"Paychex Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"ADP\"\
+    ,\"Automatic Data Processing\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"CTSH\"\
+    ,\"Cognizant Technology Solutions\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"\
+    EPAM\",\"EPAM Systems Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"G\",\"Genpact\
+    \ Limited\",\"NYSE\",\"Technology\",\"IN\"),
+    (\"WEX\",\"WEX Inc\",\"NYSE\"\
+    ,\"Technology\",\"US\"),
+    (\"JKHY\",\"Jack Henry & Associates\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"FISV\",\"Fiserv Inc\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"FIS\",\"Fidelity National Info Services\",\"NYSE\",\"Technology\"\
+    ,\"US\"),
+    (\"GPN\",\"Global Payments Inc\",\"NYSE\",\"Technology\",\"US\"\
+    ),
+    (\"NTAP\",\"NetApp Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"HPE\"\
+    ,\"Hewlett Packard Enterprise\",\"NYSE\",\"Technology\",\"US\"),
+    (\"JNPR\"\
+    ,\"Juniper Networks Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"FFIV\",\"F5\
+    \ Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"VRNS\",\"Varonis Systems Inc\"\
+    ,\"NASDAQ\",\"Technology\",\"US\"),
+    (\"S\",\"SentinelOne Inc\",\"NYSE\",\"\
+    Technology\",\"US\"),
+    (\"TENB\",\"Tenable Holdings Inc\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"QLYS\",\"Qualys Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+ \
+    \   (\"RPD\",\"Rapid7 Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"INFA\"\
+    ,\"Informatica Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"CIEN\",\"Ciena Corporation\"\
+    ,\"NYSE\",\"Technology\",\"US\"),
+    (\"TRMB\",\"Trimble Inc\",\"NASDAQ\",\"\
+    Technology\",\"US\"),
+    (\"MKSI\",\"MKS Instruments Inc\",\"NASDAQ\",\"Technology\"\
+    ,\"US\"),
+    (\"ONTO\",\"Onto Innovation Inc\",\"NYSE\",\"Technology\",\"US\"\
+    ),
+    (\"AMBA\",\"Ambarella Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"\
+    SLAB\",\"Silicon Laboratories Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"\
+    ENTG\",\"Entegris Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"CRUS\",\"Cirrus\
+    \ Logic Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"CLS\",\"Celestica Inc\"\
+    ,\"NYSE\",\"Technology\",\"CA\"),
+    (\"FLEX\",\"Flex Ltd\",\"NASDAQ\",\"Technology\"\
+    ,\"SG\"),
+    (\"JBL\",\"Jabil Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"\
+    SANM\",\"Sanmina Corporation\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"FORM\"\
+    ,\"FormFactor Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"MTSI\",\"MACOM\
+    \ Technology Solutions\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"ICHR\",\"\
+    Ichor Holdings Ltd\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"GDDY\",\"GoDaddy\
+    \ Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"ZD\",\"Ziff Davis Inc\",\"NASDAQ\"\
+    ,\"Technology\",\"US\"),
+    (\"IAC\",\"IAC Inc\",\"NASDAQ\",\"Technology\",\"\
+    US\"),
+    (\"CARS\",\"Cars.com Inc\",\"NYSE\",\"Technology\",\"US\"),
+    (\"\
+    ANGI\",\"Angi Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"TRIP\",\"TripAdvisor\
+    \ Inc\",\"NASDAQ\",\"Technology\",\"US\"),
+    (\"BKNG\",\"Booking Holdings Inc\"\
+    ,\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    (\"EXPE\",\"Expedia Group Inc\"\
+    ,\"NASDAQ\",\"Consumer Cyclical\",\"US\"),
+    # ─── International ADRs ───────────────────────────────────────────
+\
+    \    (\"SONY\",\"Sony Group Corporation\",\"NYSE\",\"Technology\",\"JP\"),
+ \
+    \   (\"NVS\",\"Novartis AG\",\"NYSE\",\"Healthcare\",\"CH\"),
+    (\"AZN\",\"\
+    AstraZeneca plc\",\"NASDAQ\",\"Healthcare\",\"GB\"),
+    (\"GSK\",\"GSK plc\"\
+    ,\"NYSE\",\"Healthcare\",\"GB\"),
+    (\"SNY\",\"Sanofi S.A.\",\"NASDAQ\",\"\
+    Healthcare\",\"FR\"),
+    (\"BP\",\"BP p.l.c.\",\"NYSE\",\"Energy\",\"GB\"),
+\
+    \    (\"SHEL\",\"Shell plc\",\"NYSE\",\"Energy\",\"GB\"),
+    (\"TTE\",\"TotalEnergies\
+    \ SE\",\"NYSE\",\"Energy\",\"FR\"),
+    (\"ENI\",\"ENI S.p.A.\",\"NYSE\",\"Energy\"\
+    ,\"IT\"),
+    (\"RIO\",\"Rio Tinto plc\",\"NYSE\",\"Materials\",\"GB\"),
+  \
+    \  (\"BHP\",\"BHP Group Limited\",\"NYSE\",\"Materials\",\"AU\"),
+    (\"VALE\"\
+    ,\"Vale S.A.\",\"NYSE\",\"Materials\",\"BR\"),
+    (\"ITUB\",\"Itau Unibanco\
+    \ Holding S.A.\",\"NYSE\",\"Financial\",\"BR\"),
+    (\"BBD\",\"Banco Bradesco\
+    \ S.A.\",\"NYSE\",\"Financial\",\"BR\"),
+    (\"BBAS3\",\"Banco do Brasil\",\"\
+    OTC\",\"Financial\",\"BR\"),
+    (\"AMX\",\"America Movil S.A.B.\",\"NYSE\",\"\
+    Communication\",\"MX\"),
+    (\"ORAN\",\"Orange S.A.\",\"NYSE\",\"Communication\"\
+    ,\"FR\"),
+    (\"UBS\",\"UBS Group AG\",\"NYSE\",\"Financial\",\"CH\"),
+   \
+    \ (\"DB\",\"Deutsche Bank AG\",\"NYSE\",\"Financial\",\"DE\"),
+    (\"BCS\",\"\
+    Barclays plc\",\"NYSE\",\"Financial\",\"GB\"),
+    (\"LLOY\",\"Lloyds Banking\
+    \ Group plc\",\"NYSE\",\"Financial\",\"GB\"),
+    (\"HSBC\",\"HSBC Holdings plc\"\
+    ,\"NYSE\",\"Financial\",\"GB\"),
+    (\"SMFG\",\"Sumitomo Mitsui Financial\"\
+    ,\"NYSE\",\"Financial\",\"JP\"),
+    (\"MFG\",\"Mizuho Financial Group\",\"NYSE\"\
+    ,\"Financial\",\"JP\"),
+    (\"MTU\",\"Mitsubishi UFJ Financial\",\"NYSE\",\"\
+    Financial\",\"JP\"),
+    (\"INFY\",\"Infosys Limited\",\"NYSE\",\"Technology\"\
+    ,\"IN\"),
+    (\"WIT\",\"Wipro Limited\",\"NYSE\",\"Technology\",\"IN\"),
+ \
+    \   (\"HDB\",\"HDFC Bank Limited\",\"NYSE\",\"Financial\",\"IN\"),
+    (\"IBN\"\
+    ,\"ICICI Bank Limited\",\"NYSE\",\"Financial\",\"IN\"),
+    (\"BNTX\",\"BioNTech\
+    \ SE\",\"NASDAQ\",\"Healthcare\",\"DE\"),
+    (\"BAYRY\",\"Bayer AG ADR\",\"\
+    OTC\",\"Healthcare\",\"DE\"),
+    (\"NOVO-B.CO\",\"Novo Nordisk Copenhagen\"\
+    ,\"CPH\",\"Healthcare\",\"DK\"),
+    (\"RHHBY\",\"Roche Holding AG ADR\",\"OTC\"\
+    ,\"Healthcare\",\"CH\"),
+    (\"SIEGY\",\"Siemens AG ADR\",\"OTC\",\"Industrials\"\
+    ,\"DE\"),
+    (\"ABB\",\"ABB Ltd\",\"NYSE\",\"Industrials\",\"CH\"),
+    (\"\
+    ALIZY\",\"Allianz SE ADR\",\"OTC\",\"Financial\",\"DE\"),
+    (\"ING\",\"ING\
+    \ Group N.V.\",\"NYSE\",\"Financial\",\"NL\"),
+    (\"PHG\",\"Philips N.V.\"\
+    ,\"NYSE\",\"Healthcare\",\"NL\"),
+    (\"STM\",\"STMicroelectronics\",\"NYSE\"\
+    ,\"Technology\",\"CH\"),
+    (\"ERIC\",\"Ericsson AB ADR\",\"NASDAQ\",\"Technology\"\
+    ,\"SE\"),
+    (\"NOK\",\"Nokia Corporation\",\"NYSE\",\"Technology\",\"FI\"),
+\
+    \    (\"LOGI\",\"Logitech International\",\"NASDAQ\",\"Technology\",\"CH\"),
+\
+    \    (\"CNQ\",\"Canadian Natural Resources\",\"NYSE\",\"Energy\",\"CA\"),
+  \
+    \  (\"SU\",\"Suncor Energy Inc\",\"NYSE\",\"Energy\",\"CA\"),
+    (\"CVE\",\"\
+    Cenovus Energy Inc\",\"NYSE\",\"Energy\",\"CA\"),
+    (\"IMO\",\"Imperial Oil\
+    \ Limited\",\"NYSE\",\"Energy\",\"CA\"),
+    (\"ENB\",\"Enbridge Inc\",\"NYSE\"\
+    ,\"Energy\",\"CA\"),
+    (\"TRP\",\"TC Energy Corporation\",\"NYSE\",\"Energy\"\
+    ,\"CA\"),
+    (\"BCE\",\"BCE Inc\",\"NYSE\",\"Communication\",\"CA\"),
+    (\"\
+    T.TO\",\"Telus Corporation\",\"TSX\",\"Communication\",\"CA\"),
+    (\"RY\",\"\
+    Royal Bank of Canada\",\"NYSE\",\"Financial\",\"CA\"),
+    (\"TD\",\"Toronto-Dominion\
+    \ Bank\",\"NYSE\",\"Financial\",\"CA\"),
+    (\"BNS\",\"Bank of Nova Scotia\"\
+    ,\"NYSE\",\"Financial\",\"CA\"),
+    (\"BMO\",\"Bank of Montreal\",\"NYSE\",\"\
+    Financial\",\"CA\"),
+    (\"CM\",\"CIBC\",\"NYSE\",\"Financial\",\"CA\"),
+ \
+    \   (\"MFC\",\"Manulife Financial\",\"NYSE\",\"Financial\",\"CA\"),
+    (\"SLF\"\
+    ,\"Sun Life Financial\",\"NYSE\",\"Financial\",\"CA\"),
+    # ─── Additional\
+    \ Crypto ────────────────────────────────────────────
+    (\"LTC-USD\",\"Litecoin\"\
+    ,\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"DOT-USD\",\"Polkadot\",\"\
+    Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"LINK-USD\",\"Chainlink\",\"Crypto\"\
+    ,\"Cryptocurrency\",\"Global\"),
+    (\"MATIC-USD\",\"Polygon (MATIC)\",\"Crypto\"\
+    ,\"Cryptocurrency\",\"Global\"),
+    (\"UNI-USD\",\"Uniswap\",\"Crypto\",\"Cryptocurrency\"\
+    ,\"Global\"),
+    (\"ATOM-USD\",\"Cosmos\",\"Crypto\",\"Cryptocurrency\",\"Global\"\
+    ),
+    (\"NEAR-USD\",\"NEAR Protocol\",\"Crypto\",\"Cryptocurrency\",\"Global\"\
+    ),
+    (\"APT-USD\",\"Aptos\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+  \
+    \  (\"ARB-USD\",\"Arbitrum\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"\
+    OP-USD\",\"Optimism\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"SUI-USD\"\
+    ,\"Sui\",\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"INJ-USD\",\"Injective\"\
+    ,\"Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"TIA-USD\",\"Celestia\",\"\
+    Crypto\",\"Cryptocurrency\",\"Global\"),
+    (\"FET-USD\",\"Fetch.ai\",\"Crypto\"\
+    ,\"Cryptocurrency\",\"Global\"),
+    (\"RNDR-USD\",\"Render Token\",\"Crypto\"\
+    ,\"Cryptocurrency\",\"Global\"),
+    (\"TAO-USD\",\"Bittensor\",\"Crypto\",\"\
+    Cryptocurrency\",\"Global\"),
+    (\"WLD-USD\",\"Worldcoin\",\"Crypto\",\"Cryptocurrency\"\
+    ,\"Global\"),
+    # ─── Additional Commodities ───────────────────────────────────────
+\
+    \    (\"ZC=F\",\"Corn Futures\",\"CBOT\",\"Commodities\",\"Global\"),
+    (\"\
+    ZW=F\",\"Wheat Futures\",\"CBOT\",\"Commodities\",\"Global\"),
+    (\"ZS=F\"\
+    ,\"Soybean Futures\",\"CBOT\",\"Commodities\",\"Global\"),
+    (\"KC=F\",\"Coffee\
+    \ Futures\",\"NYBOT\",\"Commodities\",\"Global\"),
+    (\"SB=F\",\"Sugar #11\
+    \ Futures\",\"NYBOT\",\"Commodities\",\"Global\"),
+    (\"CT=F\",\"Cotton #2\
+    \ Futures\",\"NYBOT\",\"Commodities\",\"Global\"),
+    (\"PL=F\",\"Platinum Futures\"\
+    ,\"NYMEX\",\"Commodities\",\"Global\"),
+    (\"PA=F\",\"Palladium Futures\",\"\
+    NYMEX\",\"Commodities\",\"Global\"),
+    (\"LBS=F\",\"Lumber Futures\",\"CME\"\
+    ,\"Commodities\",\"Global\"),
+    (\"LE=F\",\"Live Cattle Futures\",\"CME\",\"\
+    Commodities\",\"Global\"),
+    # ─── TASE (TA-125 Extended) ───────────────────────────────────────
+\
+    \    (\"GZIT.TA\",\"Gazit Globe Ltd\",\"TASE\",\"Real Estate\",\"IL\"),
+    (\"\
+    ENRG.TA\",\"Energix Renewable Energies\",\"TASE\",\"Utilities\",\"IL\"),
+   \
+    \ (\"MTRX.TA\",\"Matrix IT Ltd\",\"TASE\",\"Technology\",\"IL\"),
+    (\"HOT.TA\"\
+    ,\"HOT Telecommunications\",\"TASE\",\"Communication\",\"IL\"),
+    (\"TDGR.TA\"\
+    ,\"Tadiran Group Ltd\",\"TASE\",\"Industrials\",\"IL\"),
+    (\"IGUD.TA\",\"\
+    Bank Igud Israel\",\"TASE\",\"Financial\",\"IL\"),
+    (\"INVR.TA\",\"Investec\
+    \ Bank Israel\",\"TASE\",\"Financial\",\"IL\"),
+    (\"RBLI.TA\",\"Rami Levy\
+    \ Chain Stores\",\"TASE\",\"Consumer Defensive\",\"IL\"),
+    (\"SANO.TA\",\"\
+    Sano Bruno Enterprises\",\"TASE\",\"Consumer Defensive\",\"IL\"),
+    (\"PRGO.TA\"\
+    ,\"Perrigo Company plc\",\"TASE\",\"Healthcare\",\"IL\"),
+    (\"ARAD.TA\",\"\
+    Arad Investment\",\"TASE\",\"Industrials\",\"IL\"),
+    (\"SHLD.TA\",\"Shlomo\
+    \ Holdings\",\"TASE\",\"Consumer Cyclical\",\"IL\"),
+    (\"MNUL.TA\",\"Menora\
+    \ Mivtachim Insurance\",\"TASE\",\"Financial\",\"IL\"),
+    (\"MGOR.TA\",\"Mega\
+    \ Or Holdings\",\"TASE\",\"Consumer Defensive\",\"IL\"),
+    (\"ISCO.TA\",\"\
+    Israel Corp Ltd\",\"TASE\",\"Industrials\",\"IL\"),
+    (\"XLBV.TA\",\"XTL Biopharmaceuticals\"\
+    ,\"TASE\",\"Healthcare\",\"IL\"),
+    (\"OPKO.TA\",\"OPKO Health Israel\",\"\
+    TASE\",\"Healthcare\",\"IL\"),
+    (\"ESCOM.TA\",\"Comverse Technology Israel\"\
+    ,\"TASE\",\"Technology\",\"IL\"),
+    (\"LBDB.TA\",\"Leumi Mortgage Bank\",\"\
+    TASE\",\"Financial\",\"IL\"),
+    (\"MXLX.TA\",\"Maxler Ltd\",\"TASE\",\"Consumer\
+    \ Cyclical\",\"IL\"),
+    (\"PLRM.TA\",\"Pilgrim Medical\",\"TASE\",\"Healthcare\"\
+    ,\"IL\"),
+    (\"ISCR.TA\",\"Israel Credit Cards\",\"TASE\",\"Financial\",\"\
+    IL\"),
+    (\"HWAY.TA\",\"Highway 90 Ltd\",\"TASE\",\"Industrials\",\"IL\"),
+\
+    \    (\"AMRK.TA\",\"A.Dankner Real Estate\",\"TASE\",\"Real Estate\",\"IL\"),
+\
+    \    (\"BRAN.TA\",\"Brack Capital Real Estate\",\"TASE\",\"Real Estate\",\"IL\"\
+    ),
+    (\"KNFM.TA\",\"Kanaf-Nesher Investments\",\"TASE\",\"Financial\",\"IL\"\
+    ),
+    (\"GILI.TA\",\"Gili Sports\",\"TASE\",\"Consumer Cyclical\",\"IL\"),
+\
+    ]
+# Build search index: lowercase name + symbol → catalog entry
+_CATALOG_IDX\
+    \ = []
+for _c in CATALOG:
+    _CATALOG_IDX.append({
+        \"symbol\": _c[0],\
+    \ \"name\": _c[1], \"exchange\": _c[2],
+        \"sector\": _c[3], \"country\"\
+    : _c[4]
+    })
+
+def calc_rsi(closes, period=14):
+    \"\"\"Relative Strength\
+    \ Index.\"\"\"
+    try:
+        import pandas as pd
+        delta = closes.diff()
+\
+    \        gain  = delta.clip(lower=0).rolling(period).mean()
+        loss  = (-delta.clip(upper=0)).rolling(period).mean()
+\
+    \        rs    = gain.iloc[-1] / loss.iloc[-1]
+        return round(float(100\
+    \ - 100 / (1 + rs)), 1) if loss.iloc[-1] != 0 else 100.0
+    except:
+      \
+    \  return None
+
+def calc_macd(closes):
+    \"\"\"MACD, Signal, Histogram.\"\
+    \"\"
+    try:
+        ema12  = closes.ewm(span=12, adjust=False).mean()
+  \
+    \      ema26  = closes.ewm(span=26, adjust=False).mean()
+        macd   = ema12\
+    \ - ema26
+        signal = macd.ewm(span=9, adjust=False).mean()
+        hist\
+    \   = macd - signal
+        return {
+            \"macd\":   round(float(macd.iloc[-1]),\
+    \   3),
+            \"signal\": round(float(signal.iloc[-1]), 3),
+         \
+    \   \"hist\":   round(float(hist.iloc[-1]),   3),
+            \"trend\":  \"\
+    bullish\" if hist.iloc[-1] > 0 else \"bearish\",
+        }
+    except:
+   \
+    \     return None
+
+def load_stock(sym):
+    \"\"\"Fetch 1yr history via yfinance,\
+    \ compute MAs and fundamentals.\"\"\"
+    global loading_set
+    with data_lock:
+\
+    \        if sym in loading_set:
+            return
+        loading_set.add(sym)
+\
+    \    try:
+        import yfinance as yf
+        import pandas as pd
+      \
+    \  t    = yf.Ticker(sym)
+        hist = t.history(period=\"1y\", auto_adjust=True)
+\
+    \        if hist.empty or len(hist) < 5:
+            print(f\"{sym}: no history\"\
+    , flush=True)
+            return
+        closes = hist[\"Close\"]
+        cur\
+    \    = float(closes.iloc[-1])
+        prev   = float(closes.iloc[-2]) if len(closes)\
+    \ > 1 else cur
+        chg    = cur - prev
+        pct    = (chg / prev * 100)\
+    \ if prev else 0.0
+        def ma(w):
+            v = closes.rolling(w).mean().iloc[-1]
+\
+    \            return round(float(v), 2) if not pd.isna(v) and len(closes) >= w\
+    \ else None
+        ma50  = ma(50)
+        ma100 = ma(100)
+        ma150 =\
+    \ ma(150)
+        ma200 = ma(200)
+        rsi  = calc_rsi(closes)
+        macd\
+    \ = calc_macd(closes)
+        N = min(120, len(hist))
+        def rolling_series(w):
+\
+    \            r = closes.rolling(w).mean().iloc[-N:]
+            return [None\
+    \ if pd.isna(v) else round(float(v), 2) for v in r]
+        chart = {
+     \
+    \       \"dates\":  [d.strftime(\"%Y-%m-%d\") for d in hist.index[-N:]],
+   \
+    \         \"closes\": [round(float(v), 2) for v in closes.iloc[-N:]],
+      \
+    \      \"ma50\":   rolling_series(50),
+            \"ma100\":  rolling_series(100),
+\
+    \            \"ma150\":  rolling_series(150),
+            \"ma200\":  rolling_series(200),
+\
+    \        }
+        # Fundamentals
+        try:
+            info = t.info
+\
+    \        except Exception:
+            info = {}
+        def fmt_cap(v):
+ \
+    \           if not v: return None
+            if v >= 1e12: return f\"${v/1e12:.2f}T\"\
+    
+            if v >= 1e9:  return f\"${v/1e9:.2f}B\"
+            if v >= 1e6:\
+    \  return f\"${v/1e6:.2f}M\"
+            return f\"${v:,.0f}\"
+        fund\
+    \ = {
+            \"name\":          info.get(\"longName\", sym),
+         \
+    \   \"sector\":        info.get(\"sector\", \"—\"),
+            \"industry\"\
+    :      info.get(\"industry\", \"—\"),
+            \"market_cap\":    fmt_cap(info.get(\"\
+    marketCap\")),
+            \"market_cap_raw\":info.get(\"marketCap\"),
+    \
+    \        \"trailing_pe\":   round(float(info[\"trailingPE\"]), 2) if info.get(\"\
+    trailingPE\") else None,
+            \"forward_pe\":    round(float(info[\"forwardPE\"\
+    ]), 2) if info.get(\"forwardPE\") else None,
+            \"eps\":           info.get(\"\
+    trailingEps\"),
+            \"div_yield\":     round(float(info[\"dividendYield\"\
+    ]), 4) if info.get(\"dividendYield\") else None,
+            \"high_52w\":  \
+    \    info.get(\"fiftyTwoWeekHigh\"),
+            \"low_52w\":       info.get(\"\
+    fiftyTwoWeekLow\"),
+            \"avg_vol\":       info.get(\"averageVolume\"\
+    ),
+            \"beta\":          round(float(info[\"beta\"]), 2) if info.get(\"\
+    beta\") else None,
+            \"pb\":            round(float(info[\"priceToBook\"\
+    ]), 2) if info.get(\"priceToBook\") else None,
+            \"profit_margin\"\
+    : round(float(info[\"profitMargins\"]) * 100, 1) if info.get(\"profitMargins\"\
+    ) else None,
+            \"revenue_growth\":round(float(info[\"revenueGrowth\"\
+    ]) * 100, 1) if info.get(\"revenueGrowth\") else None,
+            \"description\"\
+    :   (info.get(\"longBusinessSummary\") or \"\")[:300],
+            \"currency\"\
+    :      info.get(\"currency\", \"USD\"),
+            \"rec\":           info.get(\"\
+    recommendationKey\"),
+            \"target_mean\":   info.get(\"targetMeanPrice\"\
+    ),
+            \"target_high\":   info.get(\"targetHighPrice\"),
+          \
+    \  \"target_low\":    info.get(\"targetLowPrice\"),
+            \"num_analysts\"\
+    :  info.get(\"numberOfAnalystOpinions\"),
+            \"strong_buy\":    info.get(\"\
+    recommendationMean\"),
+        }
+        raw_ccy = info.get(\"currency\", \"\
+    USD\")
+        # yfinance quotes some TASE stocks in ILA (Israeli Agoroth = 1/100\
+    \ ILS)
+        # Convert to ILS for human-readable display
+        if raw_ccy\
+    \ == \"ILA\":
+            factor = 0.01
+            display_ccy = \"ILS\"
+\
+    \        else:
+            factor = 1.0
+            display_ccy = raw_ccy
+\
+    \        def rescale(v): return round(v * factor, 2) if v else v
+        entry\
+    \ = {
+            \"price\":    rescale(cur), \"change\": rescale(chg), \"pct\"\
+    : round(pct, 2),
+            \"ma50\":     rescale(ma50), \"ma100\": rescale(ma100),\
+    \ \"ma150\": rescale(ma150), \"ma200\": rescale(ma200),
+            \"volume\"\
+    :   int(hist[\"Volume\"].iloc[-1]),
+            \"name\":     fund[\"name\"],\
+    \ \"sector\": fund[\"sector\"],
+            \"currency\": display_ccy,
+    \
+    \        \"rsi\":      rsi, \"macd_data\": macd,
+            \"chart\":    chart,\
+    \ \"_ts\": time.time(),
+        }
+        with data_lock:
+            price_cache[sym]\
+    \ = entry
+            fund_cache[sym]  = fund
+        print(f\"Loaded {sym}:\
+    \ ${round(cur,2)}  50MA={ma50}  100MA={ma100}  200MA={ma200}\", flush=True)
+\
+    \    except Exception as e:
+        print(f\"load_stock({sym}) ERROR: {e}\",\
+    \ flush=True)
+    finally:
+        with data_lock:
+            loading_set.discard(sym)
+\
+    
+def refresh_loop():
+    while True:
+        with stocks_lock:
+          \
+    \  syms = list(stocks)
+        for sym in syms:
+            with data_lock:
+\
+    \                age = time.time() - price_cache.get(sym, {}).get(\"_ts\", 0)
+\
+    \            if age > 300:      # refresh every 5 minutes
+                threading.Thread(target=load_stock,\
+    \ args=(sym,), daemon=True).start()
+        time.sleep(60)
+
+def initial_load():
+\
+    \    with stocks_lock:
+        syms = list(stocks)
+    threads = [threading.Thread(target=load_stock,\
+    \ args=(s,), daemon=True) for s in syms]
+    for t in threads: t.start()
+  \
+    \  for t in threads: t.join()
+    print(f\"All {len(syms)} stocks loaded.\",\
+    \ flush=True)
+
+threading.Thread(target=initial_load, daemon=True).start()
+\
+    threading.Thread(target=refresh_loop, daemon=True).start()
+
+def fetch_recommendations():
+\
+    \    \"\"\"Fetch StockTwits trending + combine with yfinance analyst data.\"\"\
+    \"
+    global rec_cache
+    time.sleep(90)   # wait for initial_load to complete\
+    \ first
+    ctx = ssl.create_default_context()
+    catalog_syms = {c[0] for\
+    \ c in CATALOG}
+    while True:
+        try:
+            # ── 1. StockTwits\
+    \ trending symbols (1 HTTP call) ──────
+            trending_pairs = []
+   \
+    \         try:
+                req = _ureq.Request(
+                    \"https://api.stocktwits.com/api/2/trending/symbols.json\"\
+    ,
+                    headers={\"User-Agent\": \"Mozilla/5.0 (compatible; StockApp/1.0)\"\
+    })
+                with _ureq.urlopen(req, context=ctx, timeout=8) as h:
+  \
+    \                  data = json.loads(h.read())
+                trending_pairs\
+    \ = [(s[\"symbol\"], s.get(\"watchlist_count\", 0))
+                        \
+    \          for s in data.get(\"symbols\", [])[:30]]
+                print(f\"\
+    StockTwits: {[s[0] for s in trending_pairs[:8]]}\", flush=True)
+            except\
+    \ Exception as e:
+                print(f\"StockTwits unavailable: {e}\", flush=True)
+\
+    
+            # ── 2. Merge trending + analyst-rated from fund_cache ──
+    \
+    \        seen, ranked = set(), []
+            # Trending first (social signal)
+\
+    \            for sym, wl in trending_pairs:
+                if sym in catalog_syms\
+    \ and sym not in seen:
+                    ranked.append((sym, wl, True))
+ \
+    \                   seen.add(sym)
+            # Analyst picks from already-loaded\
+    \ data (fallback + supplement)
+            with data_lock:
+                fund_snap\
+    \  = dict(fund_cache)
+                price_snap = dict(price_cache)
+      \
+    \      for sym, fd in fund_snap.items():
+                if sym in seen: continue
+\
+    \                if (fd.get(\"rec\") or \"\") in (\"strong_buy\", \"buy\"):
+\
+    \                    ranked.append((sym, 0, False))
+                    seen.add(sym)
+\
+    
+            # ── 3. Trigger load for top unloaded catalog symbols ───
+    \
+    \        needs_load = [s for s, _, _ in ranked[:15] if s not in price_snap and\
+    \ s in catalog_syms]
+            threads = [threading.Thread(target=load_stock,\
+    \ args=(s,), daemon=True) for s in needs_load]
+            for t in threads:\
+    \ t.start()
+            if threads:
+                for t in threads: t.join(timeout=30)\
+    \   # wait up to 30s for data
+
+            # ── 4. Build result list ───────────────────────────────
+\
+    \            results = []
+            for rank_i, (sym, wl_cnt, is_social) in\
+    \ enumerate(ranked):
+                with data_lock:
+                    pd\
+    \ = price_cache.get(sym)
+                    fd = fund_cache.get(sym)
+     \
+    \           if not pd or not fd: continue
+                rec    = (fd.get(\"\
+    rec\") or \"hold\").lower()
+                target = fd.get(\"target_mean\")
+\
+    \                price  = pd.get(\"price\", 0)
+                upside = round((target\
+    \ - price) / price * 100, 1) if (target and price > 0) else None
+           \
+    \     results.append({
+                    \"symbol\":      sym,
+          \
+    \          \"name\":        fd.get(\"name\", sym),
+                    \"price\"\
+    :       price,
+                    \"change\":      pd.get(\"change\", 0),
+\
+    \                    \"pct\":         pd.get(\"pct\", 0),
+                  \
+    \  \"currency\":    pd.get(\"currency\", \"USD\"),
+                    \"rec\"\
+    :         rec,
+                    \"rec_mean\":    fd.get(\"strong_buy\"),
+\
+    \                    \"target\":      target,
+                    \"upside\"\
+    :      upside,
+                    \"analysts\":    fd.get(\"num_analysts\")\
+    \ or 0,
+                    \"sector\":      fd.get(\"sector\", \"\"),
+    \
+    \                \"social_rank\": rank_i + 1 if is_social else None,
+       \
+    \             \"wl_count\":    wl_cnt,
+                })
+
+            # ──\
+    \ 5. Sort: strong_buy first, then by upside% ─────────
+            results.sort(key=lambda\
+    \ x: (
+                REC_ORDER.get(x[\"rec\"], 3),
+                -(x.get(\"\
+    upside\") or -999)
+            ))
+            with rec_lock:
+             \
+    \   rec_cache = results[:10]
+            print(f\"Recs updated: {[r['symbol']+'/'+r['rec']\
+    \ for r in rec_cache[:5]]}\", flush=True)
+        except Exception as e:
+  \
+    \          print(f\"fetch_recommendations error: {e}\", flush=True)
+        time.sleep(900)\
+    \  # refresh every 15 minutes
+
+threading.Thread(target=fetch_recommendations,\
+    \ daemon=True).start()
+
+@app.route(\"/health\")
+def health():
+    return \"\
+    ok\"
+
+@app.route(\"/api/stocks\")
+def get_stocks():
+    global request_count
+\
+    \    with state_lock:
+        request_count += 1
+        rc = request_count
+\
+    \    with data_lock:
+        result = []
+        for sym in stocks:
+      \
+    \      d = price_cache.get(sym)
+            if d:
+                result.append({
+\
+    \                    \"symbol\": sym, \"name\": d.get(\"name\", sym),
+      \
+    \              \"price\": d[\"price\"], \"change\": d[\"change\"], \"pct\": d[\"\
+    pct\"],
+                    \"ma50\": d.get(\"ma50\"), \"ma100\": d.get(\"ma100\"\
+    ), \"ma150\": d.get(\"ma150\"), \"ma200\": d.get(\"ma200\"),
+               \
+    \     \"volume\": d.get(\"volume\", 0), \"sector\": d.get(\"sector\", \"\"),
+\
+    \                    \"currency\": d.get(\"currency\", \"USD\"),
+           \
+    \         \"rsi\": d.get(\"rsi\"), \"macd_data\": d.get(\"macd_data\"),
+    \
+    \                \"age_s\": int(time.time() - d.get(\"_ts\", 0)),
+          \
+    \      })
+            else:
+                result.append({\"symbol\": sym,\
+    \ \"loading\": True})
+    return jsonify({
+        \"stocks\": result, \"request_count\"\
+    : rc,
+        \"uptime_s\": round(time.time() - start_time, 1),
+        \"pod_ip\"\
+    : os.environ.get(\"POD_IP\", \"\"),
+        \"node\": os.environ.get(\"NODE_NAME\"\
+    , \"\"),
+        \"hostname\": os.environ.get(\"HOSTNAME\", \"\"),
+        \"\
+    pid\": os.getpid(),
+    })
+
+@app.route(\"/api/stock/<symbol>\")
+def get_stock_detail(symbol):
+\
+    \    symbol = symbol.upper()
+    with data_lock:
+        d = price_cache.get(symbol)
+\
+    \        f = fund_cache.get(symbol, {})
+    if not d:
+        return jsonify({\"\
+    error\": \"not found or still loading\"}), 404
+    return jsonify({\"symbol\"\
+    : symbol, **d, \"fundamentals\": f})
+
+@app.route(\"/api/recommendations\")
+\
+    def get_recommendations():
+    with rec_lock:
+        recs = list(rec_cache)
+\
+    \    return jsonify({\"recommendations\": recs, \"ts\": int(time.time())})
+
+\
+    # Social feed cache (StockTwits per-symbol)
+social_cache = {}
+social_lock  =\
+    \ threading.Lock()
+
+@app.route(\"/api/social/<symbol>\")
+def get_social(symbol):
+\
+    \    symbol = symbol.upper()
+    # Check 5-min cache
+    with social_lock:
+\
+    \        cached = social_cache.get(symbol)
+        if cached and time.time()\
+    \ - cached['ts'] < 300:
+            return jsonify(cached['data'])
+    # Map\
+    \ symbol to StockTwits format
+    st_sym = symbol
+    if '.TA' in st_sym:
+\
+    \        st_sym = st_sym.replace('.TA', '')
+    elif '-USD' in st_sym:
+    \
+    \    st_sym = st_sym.replace('-USD', '')
+    st_map = {'GC=F':'GOLD','SI=F':'SILVER','CL=F':'OIL','NG=F':'GAS',
+\
+    \              'HG=F':'COPPER','ILS=X':'USDILS','EURUSD=X':'EURUSD',
+       \
+    \       'GBPUSD=X':'GBPUSD','JPY=X':'USDJPY'}
+    st_sym = st_map.get(symbol,\
+    \ st_sym)
+    ctx = ssl.create_default_context()
+    try:
+        url = f\"\
+    https://api.stocktwits.com/api/2/streams/symbol/{st_sym}.json?limit=10\"
+   \
+    \     req = _ureq.Request(url, headers={\"User-Agent\":\"Mozilla/5.0 (compatible;\
+    \ TraderPro/1.0)\"})
+        with _ureq.urlopen(req, context=ctx, timeout=8)\
+    \ as h:
+            data = json.loads(h.read())
+        messages = []
+    \
+    \    for msg in data.get('messages', [])[:8]:
+            sent_obj  = (msg.get('entities')\
+    \ or {}).get('sentiment') or {}
+            sentiment = sent_obj.get('basic',\
+    \ '')
+            likes     = (msg.get('likes') or {}).get('total', 0)
+    \
+    \        messages.append({
+                'id':        msg.get('id'),
+    \
+    \            'text':      (msg.get('body') or '')[:280],
+                'user':\
+    \      (msg.get('user') or {}).get('username', 'trader'),
+                'sentiment':\
+    \ sentiment,
+                'likes':     likes,
+                'time':   \
+    \   msg.get('created_at', ''),
+            })
+        bullish = sum(1 for m\
+    \ in messages if m['sentiment'] == 'Bullish')
+        bearish = sum(1 for m in\
+    \ messages if m['sentiment'] == 'Bearish')
+        result  = {'symbol': symbol,\
+    \ 'st_sym': st_sym, 'messages': messages,
+                   'bullish': bullish,\
+    \ 'bearish': bearish, 'ts': int(time.time())}
+        with social_lock:
+   \
+    \         social_cache[symbol] = {'data': result, 'ts': time.time()}
+       \
+    \ return jsonify(result)
+    except Exception as e:
+        return jsonify({'symbol':\
+    \ symbol, 'messages': [], 'error': str(e), 'ts': int(time.time())})
+
+@app.route(\"\
+    /api/catalog\")
+def get_catalog():
+    with stocks_lock:
+        wl = set(stocks)
+\
+    \    return jsonify({\"catalog\": [
+        {**item, \"in_watchlist\": item[\"\
+    symbol\"] in wl}
+        for item in _CATALOG_IDX
+    ]})
+
+@app.route(\"/api/search\"\
+    )
+def search_stocks():
+    q = (request.args.get(\"q\") or \"\").strip()
+ \
+    \   if len(q) < 1:
+        return jsonify({\"results\": []})
+    qu = q.upper()
+\
+    \    results = []
+    with stocks_lock:
+        wl = set(stocks)
+    for item\
+    \ in _CATALOG_IDX:
+        sym  = item[\"symbol\"].upper()
+        name = item[\"\
+    name\"].upper()
+        score = 0
+        if sym == qu:                    \
+    \                        score = 100
+        elif sym.startswith(qu):       \
+    \                          score = 85
+        elif qu in sym:               \
+    \                           score = 70
+        elif name.startswith(qu):    \
+    \                            score = 65
+        elif any(w.startswith(qu) for\
+    \ w in name.split() if w):  score = 60
+        elif qu in name:             \
+    \                            score = 40
+        else:
+            continue
+\
+    \        results.append({**item, \"score\": score, \"in_watchlist\": item[\"symbol\"\
+    ] in wl})
+    results.sort(key=lambda x: -x[\"score\"])
+    # Deduplicate by\
+    \ symbol
+    seen = set()
+    deduped = []
+    for r in results:
+        if\
+    \ r[\"symbol\"] not in seen:
+            seen.add(r[\"symbol\"])
+          \
+    \  deduped.append(r)
+    return jsonify({\"results\": deduped[:12]})
+
+@app.route(\"\
+    /api/stocks/add\", methods=[\"POST\"])
+def add_stock():
+    sym = ((request.json\
+    \ or {}).get(\"symbol\") or \"\").upper().strip()
+    if not sym:
+        return\
+    \ jsonify({\"error\": \"symbol required\"}), 400
+    with stocks_lock:
+    \
+    \    if sym in stocks:
+            return jsonify({\"status\": \"exists\", \"\
+    symbol\": sym})
+        stocks.append(sym)
+    # Load synchronously in a short-timeout\
+    \ thread and validate
+    result = {\"ok\": False}
+    def load_and_check():
+\
+    \        load_stock(sym)
+        with data_lock:
+            result[\"ok\"]\
+    \ = sym in price_cache
+    t = threading.Thread(target=load_and_check, daemon=True)
+\
+    \    t.start()
+    t.join(timeout=30)  # wait up to 30s for yfinance
+    if\
+    \ not result[\"ok\"]:
+        with stocks_lock:
+            if sym in stocks:\
+    \ stocks.remove(sym)
+        with data_lock:
+            price_cache.pop(sym,\
+    \ None); fund_cache.pop(sym, None)
+        return jsonify({\"status\": \"error\"\
+    , \"symbol\": sym, \"error\": \"Symbol not found or no data available\"}), 404
+\
+    \    return jsonify({\"status\": \"ok\", \"symbol\": sym})
+
+@app.route(\"/api/stocks/<symbol>\"\
+    , methods=[\"DELETE\"])
+def remove_stock(symbol):
+    symbol = symbol.upper()
+\
+    \    with stocks_lock:
+        if symbol in stocks:
+            stocks.remove(symbol)
+\
+    \    with data_lock:
+        price_cache.pop(symbol, None)
+        fund_cache.pop(symbol,\
+    \ None)
+    return jsonify({\"status\": \"removed\", \"symbol\": symbol})
+
+\
+    @app.route(\"/api/status\")
+def status():
+    with state_lock:
+        rc =\
+    \ request_count; tc = trade_count; pnl = pnl_total
+    return jsonify({
+   \
+    \     \"request_count\": rc, \"trade_count\": tc, \"pnl_total\": round(pnl, 2),
+\
+    \        \"uptime_s\": round(time.time() - start_time, 1),
+        \"pod_ip\"\
+    : os.environ.get(\"POD_IP\", \"\"),
+        \"node\": os.environ.get(\"NODE_NAME\"\
+    , \"\"),
+        \"hostname\": os.environ.get(\"HOSTNAME\", \"\"),
+        \"\
+    pid\": os.getpid(),
+    })
+
+@app.route(\"/api/trade\", methods=[\"POST\"])
+\
+    def trade():
+    global trade_count, pnl_total
+    body  = request.json or {}
+\
+    \    qty   = int(body.get(\"qty\", 10))
+    sym   = body.get(\"symbol\", \"AAPL\"\
+    ).upper()
+    with data_lock:
+        p = price_cache.get(sym, {}).get(\"price\"\
+    , 100.0)
+    gain = random.uniform(-0.04, 0.06) * p * qty
+    with state_lock:
+\
+    \        trade_count += 1
+        pnl_total   += gain
+        tc = trade_count;\
+    \ pnl = pnl_total
+    return jsonify({\"trades\": tc, \"pnl\": round(pnl, 2),\
+    \ \"gain\": round(gain, 2)})
+
+print(f\"Stock backend v2 (yfinance) | pid={os.getpid()}\
+    \ | node={os.environ.get('NODE_NAME','')} | ip={os.environ.get('POD_IP','')}\"\
+    , flush=True)
+app.run(host=\"0.0.0.0\", port=8080, threaded=True)"
+kind: ConfigMap
+metadata:
+  name: stock-backend-config
+  namespace: stock-app
+
+---
+apiVersion: v1
+data:
+  index.html: "<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+<meta charset=\"UTF-8\"\
+    >
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\"\
+    >
+<meta name=\"theme-color\" content=\"#161b22\">
+<meta name=\"apple-mobile-web-app-capable\"\
+    \ content=\"yes\">
+<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"\
+    black-translucent\">
+<meta name=\"mobile-web-app-capable\" content=\"yes\">
+\
+    <title>TraderPro — Live Market Data</title>
+<script src=\"https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js\"\
+    ></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe\
+    \ UI',sans-serif;background:#0d1117;color:#e6edf3;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+\
+    /* NAV */
+nav{background:#161b22;border-bottom:1px solid #30363d;height:52px;display:flex;align-items:center;padding:0\
+    \ 16px;gap:12px;flex-shrink:0;z-index:10}
+.logo{font-size:18px;font-weight:700;color:#58a6ff;letter-spacing:-.5px;white-space:nowrap}.logo\
+    \ span{color:#3fb950}
+.tase-badge{font-size:9px;background:#1f6feb22;color:#58a6ff;border:1px\
+    \ solid #1f6feb44;border-radius:3px;padding:0 3px;margin-left:3px;vertical-align:middle;font-weight:700}
+\
+    /* ── Search engine (primary stock discovery) ── */
+.search-wrap{position:relative;flex:1;max-width:640px}
+\
+    .search-inp{width:100%;background:#0d1117;border:1.5px solid #30363d;color:#e6edf3;padding:9px\
+    \ 14px 9px 38px;border-radius:10px;font-size:14px;outline:none;transition:border\
+    \ .15s,box-shadow .15s}
+.search-inp:focus{border-color:#58a6ff;box-shadow:0 0\
+    \ 0 3px #58a6ff18}
+.search-inp::placeholder{color:#8b949e}
+.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:#8b949e;font-size:15px;pointer-events:none}
+\
+    .search-drop{position:absolute;top:calc(100% + 6px);left:0;right:0;background:#161b22;border:1px\
+    \ solid #30363d;border-radius:12px;box-shadow:0 12px 40px #000a;z-index:999;max-height:420px;overflow-y:auto;display:none}
+\
+    .search-drop.open{display:block}
+.search-section{padding:7px 14px 3px;font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.9px;font-weight:700;border-bottom:1px\
+    \ solid #21262d}
+.search-item{display:flex;align-items:center;gap:9px;padding:10px\
+    \ 14px;cursor:pointer;transition:background .1s;border-bottom:1px solid #21262d0a}
+\
+    .search-item:last-child{border-bottom:none}
+.search-item:hover,.search-item.focused{background:#21262d}
+\
+    .search-item.in-wl .si-sym{color:#58a6ff}
+.si-flag{font-size:16px;width:22px;text-align:center;flex-shrink:0}
+\
+    .si-sym{font-size:13px;font-weight:700;color:#e6edf3;width:85px;flex-shrink:0}
+\
+    .si-name{font-size:12px;color:#8b949e;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+\
+    .si-exch{font-size:10px;background:#1f6feb22;color:#58a6ff;border:1px solid #1f6feb44;border-radius:4px;padding:1px\
+    \ 6px;font-weight:600;flex-shrink:0}
+.si-sec{font-size:10px;color:#8b949e;flex-shrink:0;max-width:90px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+\
+    .si-wl-tag{font-size:10px;background:#3fb95022;color:#3fb950;border:1px solid\
+    \ #3fb95044;border-radius:4px;padding:1px 5px;flex-shrink:0;font-weight:600}
+\
+    .si-add-hint{font-size:10px;color:#8b949e66;flex-shrink:0;display:none}
+.search-item:hover\
+    \ .si-add-hint,.search-item.focused .si-add-hint{display:block}
+/* ── RSI Bar\
+    \ ── */
+.ti-label{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:8px\
+    \ 0 4px;font-weight:600}
+.rsi-wrap{margin-bottom:4px}
+.rsi-track{position:relative;height:8px;border-radius:4px;background:linear-gradient(to\
+    \ right,#3fb950 0%,#3fb950 30%,#e6edf3 30%,#e6edf3 70%,#f85149 70%,#f85149 100%);margin-bottom:4px}
+\
+    .rsi-marker{position:absolute;top:-3px;width:14px;height:14px;border-radius:50%;background:#fff;border:2px\
+    \ solid #161b22;box-shadow:0 0 4px #0006;transform:translateX(-50%);transition:left\
+    \ .3s}
+.rsi-zones{display:flex;font-size:9px;color:#8b949e;justify-content:space-between;padding:0\
+    \ 1px}
+.rsi-row{display:flex;align-items:center;gap:8px;margin-top:2px}
+.rsi-num{font-size:18px;font-weight:700;min-width:44px}
+\
+    .rsi-label{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}
+\
+    .rsi-os{background:#3fb95022;color:#3fb950}
+.rsi-ob{background:#f8514922;color:#f85149}
+\
+    .rsi-neu{background:#8b949e22;color:#8b949e}
+/* ── MACD ── */
+.ti-row{display:grid;grid-template-columns:1fr\
+    \ 1fr 1fr 1fr;gap:4px;margin-top:6px}
+.ti-box{background:#161b22;border:1px solid\
+    \ #21262d;border-radius:6px;padding:5px 7px;text-align:center}
+.ti-lab{font-size:9px;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
+\
+    .ti-val{font-size:12px;font-weight:700}
+/* ── 52W Range ── */
+.range-wrap{display:flex;align-items:center;gap:6px;margin:4px\
+    \ 0}
+.range-lo,.range-hi{font-size:10px;color:#8b949e;white-space:nowrap;min-width:44px}
+\
+    .range-hi{text-align:right}
+.range-track{flex:1;position:relative;height:6px;background:#21262d;border-radius:3px}
+\
+    .range-fill{position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,#f85149,#e6edf3,#3fb950);border-radius:3px}
+\
+    .range-dot{position:absolute;top:-4px;width:14px;height:14px;border-radius:50%;background:#58a6ff;border:2px\
+    \ solid #161b22;transform:translateX(-50%);transition:left .3s}
+.range-pct{font-size:10px;color:#8b949e;margin-bottom:4px}
+\
+    /* ── Analyst ── */
+.analyst-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin:6px\
+    \ 0}
+.analyst-pill{border-radius:5px;padding:5px 2px;text-align:center}
+.analyst-pill\
+    \ .ap-cnt{font-size:14px;font-weight:700}
+.analyst-pill .ap-lab{font-size:9px;text-transform:uppercase;letter-spacing:.3px;opacity:.8}
+\
+    .ap-sb{background:#3fb95030;color:#3fb950}
+.ap-b{background:#58a6ff30;color:#58a6ff}
+\
+    .ap-h{background:#8b949e30;color:#8b949e}
+.ap-s{background:#f0883e30;color:#f0883e}
+\
+    .ap-ss{background:#f8514930;color:#f85149}
+.analyst-target{font-size:12px;color:#e6edf3;margin:4px\
+    \ 0}
+.analyst-bar{height:6px;border-radius:3px;background:#21262d;margin:6px\
+    \ 0;overflow:hidden;display:flex}
+.ab-buy{background:#3fb950;transition:width\
+    \ .3s}
+.ab-hold{background:#8b949e;transition:width .3s}
+.ab-sell{background:#f85149;transition:width\
+    \ .3s}
+.analyst-rec-badge{display:inline-block;border-radius:6px;padding:3px\
+    \ 10px;font-size:12px;font-weight:700;margin-top:4px}
+.rec-strong-buy{background:#3fb95030;color:#3fb950;border:1px\
+    \ solid #3fb95066}
+.rec-buy{background:#58a6ff30;color:#58a6ff;border:1px solid\
+    \ #58a6ff66}
+.rec-hold{background:#8b949e30;color:#8b949e;border:1px solid #8b949e66}
+\
+    .rec-sell{background:#f8514930;color:#f85149;border:1px solid #f8514966}
+.rec-strong-sell{background:#f8514950;color:#f85149;border:1px\
+    \ solid #f85149}
+.earnings-row{font-size:11px;color:#8b949e;margin-top:4px}
+\
+    .earnings-date{color:#f0883e;font-weight:600}
+.nav-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+\
+    .clock{color:#8b949e;font-size:12px;font-variant-numeric:tabular-nums}
+/* TICKER\
+    \ */
+.ticker{background:#0d1117;border-bottom:1px solid #21262d;height:28px;overflow:hidden;white-space:nowrap;flex-shrink:0}
+\
+    .ticker-inner{display:inline-flex;animation:scroll 50s linear infinite}
+.tick-item{display:inline-flex;align-items:center;gap:6px;margin:0\
+    \ 20px;font-size:11px;font-weight:600;line-height:28px}
+.tick-p{color:#3fb950}.tick-n{color:#f85149}
+\
+    @keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+\
+    /* MAIN */
+.main{display:flex;flex:1;overflow:hidden}
+/* WATCHLIST */
+.watchlist{width:340px;border-right:1px\
+    \ solid #21262d;display:flex;flex-direction:column;flex-shrink:0}
+.wl-header{background:#161b22;border-bottom:1px\
+    \ solid #21262d;padding:0 8px;flex-shrink:0}
+.wl-cols{display:grid;grid-template-columns:62px\
+    \ 1fr 80px 66px 26px;font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;padding:6px\
+    \ 4px;font-weight:600}
+.wl-cols span{text-align:right}.wl-cols span:first-child,.wl-cols\
+    \ span:nth-child(2){text-align:left}
+.wl-body{overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch}
+\
+    .wl-row{display:grid;grid-template-columns:62px 1fr 80px 66px 26px;align-items:center;padding:7px\
+    \ 4px;border-bottom:1px solid #21262d0a;cursor:pointer;transition:background .1s}
+\
+    .wl-row:hover{background:#161b2280}
+.wl-row.active{background:#1f6feb15;border-left:2px\
+    \ solid #58a6ff}
+.sym{font-size:13px;font-weight:700}
+.sname{font-size:10px;color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+\
+    .price{font-size:13px;font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+\
+    .chg{font-size:11px;font-weight:600;text-align:right;padding:2px 5px;border-radius:3px}
+\
+    .pos{color:#3fb950;background:#3fb95015}.neg{color:#f85149;background:#f8514915}
+\
+    .ma-cell{text-align:right;font-size:10px}
+.ma-val{font-variant-numeric:tabular-nums;color:#8b949e}
+\
+    .ma-ind{font-size:9px;font-weight:700;padding:1px 3px;border-radius:3px;margin-left:2px}
+\
+    .ma-up{color:#3fb950;background:#3fb95020}.ma-dn{color:#f85149;background:#f8514920}.ma-eq{color:#8b949e}
+\
+    .del-btn{cursor:pointer;color:#8b949e;font-size:14px;text-align:center;border-radius:4px;transition:all\
+    \ .1s}
+.del-btn:hover{color:#f85149;background:#f8514915}
+.loading-row{padding:10px\
+    \ 12px;color:#8b949e;font-size:12px;font-style:italic}
+/* CENTER */
+.chart-area{flex:1;display:flex;flex-direction:column;overflow:hidden;border-right:1px\
+    \ solid #21262d}
+.chart-header{background:#161b22;border-bottom:1px solid #21262d;padding:10px\
+    \ 16px;flex-shrink:0}
+.ch-name{font-size:11px;color:#8b949e;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+\
+    .ch-price{font-size:28px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums}
+\
+    .ch-chg{font-size:13px;font-weight:600;padding:2px 8px;border-radius:5px;margin-left:8px}
+\
+    .ch-ma-legend{display:flex;gap:16px;margin-top:6px}
+.ch-ma-item{display:flex;align-items:center;gap:5px;font-size:11px;color:#8b949e}
+\
+    .ch-ma-dot{width:12px;height:3px;border-radius:2px}
+.chart-wrap{flex:1;padding:12px\
+    \ 16px;position:relative;min-height:0}
+.chart-empty{display:flex;align-items:center;justify-content:center;color:#8b949e;font-size:14px;height:100%}
+\
+    /* RIGHT PANEL */
+.detail-panel{width:280px;display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
+\
+    .dp-section{padding:12px 14px;border-bottom:1px solid #21262d}
+.dp-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#8b949e;margin-bottom:10px}
+\
+    .fund-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.fund-box{background:#161b22;border:1px\
+    \ solid #21262d;border-radius:6px;padding:7px 9px}
+.fund-label{font-size:9px;color:#8b949e;text-transform:uppercase;letter-spacing:.3px}
+\
+    .fund-val{font-size:13px;font-weight:600;color:#e6edf3;margin-top:2px;font-variant-numeric:tabular-nums}
+\
+    .fund-val.green{color:#3fb950}.fund-val.red{color:#f85149}.fund-val.blue{color:#58a6ff}
+\
+    .sector-badge{display:inline-block;background:#1f6feb20;border:1px solid #1f6feb44;color:#58a6ff;border-radius:12px;padding:3px\
+    \ 10px;font-size:11px;font-weight:600;margin-top:4px}
+.desc{font-size:11px;color:#8b949e;line-height:1.5;margin-top:6px}
+\
+    /* TRADE */
+/* PNL */
+/* MIG STATUS */
+.mig-row{display:flex;justify-content:space-between;padding:4px\
+    \ 0;font-size:11px;border-bottom:1px solid #21262d0a}
+.mig-key{color:#8b949e}.mig-val{color:#58a6ff;font-family:monospace;font-size:10px}
+\
+    .live-dot{width:7px;height:7px;border-radius:50%;background:#3fb950;box-shadow:0\
+    \ 0 6px #3fb950;display:inline-block;margin-right:5px;animation:pulse 2s infinite}
+\
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+/* ── Our Recommendation\
+    \ section ── */
+.rec-section{background:#0d1117;border-bottom:1px solid #21262d;padding:12px\
+    \ 16px 14px;flex-shrink:0}
+.rec-hdr{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+\
+    .rec-title{font-size:13px;font-weight:700;color:#e6edf3;display:flex;align-items:center;gap:6px}
+\
+    .rec-sub{font-size:11px;color:#8b949e;margin-left:4px}
+.rec-src{font-size:10px;background:#f0883e22;color:#f0883e;border:1px\
+    \ solid #f0883e44;border-radius:10px;padding:2px 8px;font-weight:600}
+.rec-refresh{margin-left:auto;font-size:11px;color:#8b949e;cursor:pointer;background:none;border:none;color:#8b949e}
+\
+    .rec-refresh:hover{color:#e6edf3}
+.rec-cards{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin;scrollbar-color:#30363d\
+    \ transparent;-webkit-overflow-scrolling:touch}
+.rec-cards::-webkit-scrollbar{height:4px}.rec-cards::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+\
+    .rec-card{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:13px\
+    \ 14px;min-width:168px;max-width:168px;cursor:pointer;transition:border-color\
+    \ .15s,transform .12s,box-shadow .15s;flex-shrink:0;position:relative}
+.rec-card:hover{border-color:#58a6ff55;transform:translateY(-2px);box-shadow:0\
+    \ 6px 20px #58a6ff10}
+.rc-top{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+\
+    .rc-flag{font-size:14px}
+.rc-sym{font-size:14px;font-weight:800;color:#e6edf3;letter-spacing:.3px}
+\
+    .rc-social{font-size:9px;background:#f0883e22;color:#f0883e;border:1px solid #f0883e44;border-radius:3px;padding:1px\
+    \ 4px;font-weight:700}
+.rc-name{font-size:10px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:7px}
+\
+    .rc-price-row{display:flex;align-items:baseline;gap:5px;margin-bottom:6px}
+.rc-price{font-size:15px;font-weight:700;color:#e6edf3}
+\
+    .rc-pct{font-size:11px;font-weight:600}
+.rc-pct.up{color:#3fb950}.rc-pct.dn{color:#f85149}
+\
+    .rc-badge{text-align:center;border-radius:6px;padding:4px 0;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px}
+\
+    .rb-sb{background:#3fb95025;color:#3fb950;border:1px solid #3fb95050}
+.rb-b {background:#58a6ff20;color:#58a6ff;border:1px\
+    \ solid #58a6ff44}
+.rb-h {background:#8b949e20;color:#8b949e;border:1px solid\
+    \ #8b949e44}
+.rb-s {background:#f8514920;color:#f85149;border:1px solid #f8514944}
+\
+    .rc-upside{font-size:11px;color:#3fb950;font-weight:600;margin-bottom:3px}
+.rc-upside.negative{color:#f85149}
+\
+    .rc-meta{font-size:10px;color:#8b949e}
+.rc-add{margin-top:8px;width:100%;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:5px\
+    \ 0;font-size:11px;font-weight:700;cursor:pointer;transition:background .12s}
+\
+    .rc-add:hover{background:#388bfd}
+.rc-add.added{background:#3fb95030;color:#3fb950;border:1px\
+    \ solid #3fb95050;cursor:default}
+.rec-empty{color:#8b949e;font-size:12px;padding:8px\
+    \ 0}
+
+/* ── Social Feed ── */
+.social-summary{display:flex;gap:8px;padding:8px\
+    \ 0 10px;flex-wrap:wrap}
+.ss-pill{font-size:11px;font-weight:700;padding:3px\
+    \ 10px;border-radius:10px;display:flex;align-items:center;gap:4px}
+.ss-bull{background:#3fb95020;color:#3fb950;border:1px\
+    \ solid #3fb95040}
+.ss-bear{background:#f8514920;color:#f85149;border:1px solid\
+    \ #f8514940}
+.ss-neutral{background:#8b949e20;color:#8b949e;border:1px solid\
+    \ #8b949e40}
+.social-feed{margin:0 -14px}
+.social-msg{padding:8px 14px;border-top:1px\
+    \ solid #21262d;position:relative;transition:background .1s}
+.social-msg:hover{background:#161b2260}
+\
+    .sm-header{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.sm-user{font-size:11px;font-weight:700;color:#58a6ff}
+\
+    .sm-time{font-size:10px;color:#8b949e;margin-left:auto}
+.sm-sent{font-size:9px;font-weight:700;padding:1px\
+    \ 5px;border-radius:4px}
+.sm-bull{background:#3fb95020;color:#3fb950;border:1px\
+    \ solid #3fb95040}
+.sm-bear{background:#f8514920;color:#f85149;border:1px solid\
+    \ #f8514940}
+.sm-body{font-size:11px;color:#c9d1d9;line-height:1.5;word-break:break-word}
+\
+    .sm-likes{font-size:10px;color:#8b949e55;margin-top:2px}
+.ss-loading{font-size:11px;color:#8b949e;padding:6px\
+    \ 0;font-style:italic}
+.ss-st-link{font-size:10px;color:#8b949e;margin-top:6px;display:block}
+\
+    .ss-st-link a{color:#58a6ff;text-decoration:none}.ss-st-link a:hover{text-decoration:underline}
+\
+    
+/* ══════════════════════════════════════════════
+   RESPONSIVE — Tablet  (≤\
+    \ 1100px)
+   ══════════════════════════════════════════════ */
+@media (max-width:1100px){
+\
+    \  .watchlist{width:300px}
+  .detail-panel{width:240px}
+  .ch-ma-legend{gap:10px;flex-wrap:wrap}
+\
+    }
+
+/* ══════════════════════════════════════════════
+   RESPONSIVE — Mobile\
+    \  (≤ 767px)
+   ══════════════════════════════════════════════ */
+@media (max-width:767px){
+\
+    \  /* Allow page to scroll vertically */
+  body{height:auto;min-height:100vh;overflow-y:auto;overflow-x:hidden}
+\
+    
+  /* Nav — compact, search takes full width */
+  nav{height:50px;padding:0\
+    \ 10px;gap:8px}
+  .logo{font-size:15px;flex-shrink:0}
+  .logo span{display:none}\
+    \          /* hide \"Pro\" suffix */
+  .clock{display:none}
+  .search-wrap{max-width:none}
+\
+    \  .search-inp{font-size:13px;padding:8px 10px 8px 32px}
+  .search-inp::placeholder{font-size:11px}
+\
+    \  .search-drop{max-height:65vh;border-radius:0 0 12px 12px}
+  .si-exch,.si-sec,.si-add-hint{display:none}\
+    \   /* simplify dropdown rows */
+
+  /* Ticker — hide to save vertical space\
+    \ */
+  .ticker{display:none}
+
+  /* Rec strip — tighter padding */
+  .rec-section{padding:10px\
+    \ 10px 12px}
+  .rec-src{display:none}
+  .rec-hdr{gap:6px}
+  .rec-card{min-width:152px;max-width:152px;padding:11px\
+    \ 11px}
+  .rc-price{font-size:14px}
+  .rc-add{font-size:10px;padding:4px 0}
+\
+    
+  /* Main: stack vertically, allow scroll */
+  .main{flex-direction:column;overflow:visible;height:auto}
+\
+    
+  /* Watchlist — full width */
+  .watchlist{width:100%;border-right:none;border-bottom:1px\
+    \ solid #30363d;max-height:none}
+  .wl-cols,.wl-row{grid-template-columns:68px\
+    \ 1fr 80px 60px 26px}
+  .wl-row{padding:9px 6px}
+  .sym{font-size:12px}
+  .price{font-size:12px}
+\
+    \  .chg{font-size:10px}
+
+  /* Chart area — full width */
+  .chart-area{border-right:none;min-height:300px}
+\
+    \  .ch-price{font-size:22px}
+  .ch-ma-legend{flex-wrap:wrap;gap:6px;margin-top:4px}
+\
+    \  .ch-ma-item{font-size:10px}
+  .chart-wrap{padding:8px 10px}
+
+  /* Detail\
+    \ panel — full width below chart */
+  .detail-panel{width:100%;border-left:none}
+\
+    \  .fund-grid{grid-template-columns:1fr 1fr 1fr}  /* 3 cols on mobile */
+  .analyst-grid{grid-template-columns:repeat(5,1fr)}
+\
+    
+  /* Chart header */
+  .chart-header{padding:8px 12px}
+}
+
+/* ══════════════════════════════════════════════
+\
+    \   RESPONSIVE — Small phones  (≤ 390px, iPhone SE)
+   ══════════════════════════════════════════════\
+    \ */
+@media (max-width:390px){
+  .logo{display:none}
+  .wl-cols,.wl-row{grid-template-columns:58px\
+    \ 1fr 70px 52px 22px}
+  .rec-card{min-width:140px;max-width:140px}
+  .fund-grid{grid-template-columns:1fr\
+    \ 1fr}
+}
+</style>
+</head>
+<body>
+<nav>
+  <div class=\"logo\">Trader<span>Pro</span></div>
+\
+    \  <div class=\"search-wrap\" id=\"search-wrap\">
+    <span class=\"search-icon\"\
+    >🔍</span>
+    <input class=\"search-inp\" id=\"search-inp\"
+      placeholder=\"\
+    Search stocks, crypto, gold… AAPL, Bitcoin, Datadog, USD/ILS\"
+      autocomplete=\"\
+    off\" spellcheck=\"false\">
+    <div class=\"search-drop\" id=\"search-drop\"\
+    ></div>
+  </div>
+  <div class=\"nav-right\">
+    <div class=\"clock\" id=\"\
+    clock\">00:00:00</div>
+  </div>
+</nav>
+<div class=\"ticker\"><div class=\"\
+    ticker-inner\" id=\"ticker\"></div></div>
+
+<!-- Our Recommendation section -->
+\
+    <div class=\"rec-section\" id=\"rec-section\" style=\"display:none\">
+  <div\
+    \ class=\"rec-hdr\">
+    <div class=\"rec-title\">⭐ Our Recommendation</div>
+\
+    \    <span class=\"rec-src\" id=\"rec-src\">📊 StockTwits + Analysts</span>
+\
+    \    <span class=\"rec-sub\" id=\"rec-sub\">Loading…</span>
+    <button class=\"\
+    rec-refresh\" onclick=\"fetchRecommendations()\" title=\"Refresh\">↺ Refresh</button>
+\
+    \  </div>
+  <div class=\"rec-cards\" id=\"rec-cards\"><div class=\"rec-empty\"\
+    >Loading recommendations…</div></div>
+</div>
+
+<div class=\"main\">
+
+  <!--\
+    \ WATCHLIST -->
+  <div class=\"watchlist\">
+    <div class=\"wl-header\">
+\
+    \      <div class=\"wl-cols\">
+        <span>Symbol</span><span>Name</span>
+\
+    \        <span>Price</span><span>Chg%</span>
+        <span></span>
+      </div>
+\
+    \    </div>
+    <div class=\"wl-body\" id=\"wl-body\"></div>
+  </div>
+
+  <!--\
+    \ CHART -->
+  <div class=\"chart-area\">
+    <div class=\"chart-header\">
+\
+    \      <div class=\"ch-name\" id=\"ch-sym\">Select a stock</div>
+      <div style=\"\
+    display:flex;align-items:baseline\">
+        <div class=\"ch-price\" id=\"ch-price\"\
+    >—</div>
+        <div class=\"ch-chg\" id=\"ch-chg\"></div>
+      </div>
+ \
+    \     <div class=\"ch-ma-legend\">
+        <div class=\"ch-ma-item\"><div class=\"\
+    ch-ma-dot\" style=\"background:#58a6ff\"></div><span id=\"leg-price\">Price</span></div>
+\
+    \        <div class=\"ch-ma-item\"><div class=\"ch-ma-dot\" style=\"background:#f0883e\"\
+    ></div><span id=\"leg-50\">MA 50</span></div>
+        <div class=\"ch-ma-item\"\
+    ><div class=\"ch-ma-dot\" style=\"background:#d2a8ff\"></div><span id=\"leg-100\"\
+    >MA 100</span></div>
+        <div class=\"ch-ma-item\"><div class=\"ch-ma-dot\"\
+    \ style=\"background:#3fb950\"></div><span id=\"leg-150\">MA 150</span></div>
+\
+    \        <div class=\"ch-ma-item\"><div class=\"ch-ma-dot\" style=\"background:#f85149\"\
+    ></div><span id=\"leg-200\">MA 200</span></div>
+      </div>
+    </div>
+  \
+    \  <div class=\"chart-wrap\">
+      <canvas id=\"priceChart\"></canvas>
+   \
+    \   <div class=\"chart-empty\" id=\"chart-empty\">← Select a stock to view chart</div>
+\
+    \    </div>
+  </div>
+
+  <!-- DETAIL PANEL -->
+  <div class=\"detail-panel\"\
+    >
+    <!-- Fundamentals -->
+    <div class=\"dp-section\">
+      <div class=\"\
+    dp-title\">Fundamentals</div>
+      <div class=\"fund-grid\" id=\"fund-grid\"\
+    >
+        <div class=\"fund-box\"><div class=\"fund-label\">Market Cap</div><div\
+    \ class=\"fund-val blue\" id=\"f-cap\">—</div></div>
+        <div class=\"fund-box\"\
+    ><div class=\"fund-label\">P/E (TTM)</div><div class=\"fund-val\" id=\"f-pe\"\
+    >—</div></div>
+        <div class=\"fund-box\"><div class=\"fund-label\">Fwd\
+    \ P/E</div><div class=\"fund-val\" id=\"f-fpe\">—</div></div>
+        <div class=\"\
+    fund-box\"><div class=\"fund-label\">EPS (TTM)</div><div class=\"fund-val\" id=\"\
+    f-eps\">—</div></div>
+        <div class=\"fund-box\"><div class=\"fund-label\"\
+    >52W High</div><div class=\"fund-val green\" id=\"f-52h\">—</div></div>
+    \
+    \    <div class=\"fund-box\"><div class=\"fund-label\">52W Low</div><div class=\"\
+    fund-val red\" id=\"f-52l\">—</div></div>
+        <div class=\"fund-box\"><div\
+    \ class=\"fund-label\">Div Yield</div><div class=\"fund-val\" id=\"f-div\">—</div></div>
+\
+    \        <div class=\"fund-box\"><div class=\"fund-label\">Beta</div><div class=\"\
+    fund-val\" id=\"f-beta\">—</div></div>
+        <div class=\"fund-box\"><div class=\"\
+    fund-label\">P/B</div><div class=\"fund-val\" id=\"f-pb\">—</div></div>
+    \
+    \    <div class=\"fund-box\"><div class=\"fund-label\">Net Margin</div><div class=\"\
+    fund-val\" id=\"f-margin\">—</div></div>
+      </div>
+      <div id=\"f-sector\"\
+    ></div>
+      <div class=\"desc\" id=\"f-desc\"></div>
+    </div>
+    <!--\
+    \ Technical Indicators -->
+    <div class=\"dp-section\">
+      <div class=\"\
+    dp-title\">Technical Indicators</div>
+      <div class=\"ti-label\">RSI (14-day)</div>
+\
+    \      <div class=\"rsi-wrap\">
+        <div class=\"rsi-track\"><div class=\"\
+    rsi-marker\" id=\"rsi-marker\" style=\"left:50%\"></div></div>
+        <div class=\"\
+    rsi-zones\"><span>0</span><span>Oversold 30</span><span style=\"flex:4;text-align:center\"\
+    >Neutral</span><span>70 Overbought</span><span>100</span></div>
+      </div>
+\
+    \      <div class=\"rsi-row\">
+        <div class=\"rsi-num\" id=\"rsi-num\"\
+    >—</div>
+        <div class=\"rsi-label rsi-neu\" id=\"rsi-lbl\">—</div>
+  \
+    \    </div>
+      <div class=\"ti-label\" style=\"margin-top:10px\">MACD (12,26,9)</div>
+\
+    \      <div class=\"ti-row\">
+        <div class=\"ti-box\"><div class=\"ti-lab\"\
+    >MACD</div><div class=\"ti-val\" id=\"macd-v\">—</div></div>
+        <div class=\"\
+    ti-box\"><div class=\"ti-lab\">Signal</div><div class=\"ti-val\" id=\"macd-s\"\
+    >—</div></div>
+        <div class=\"ti-box\"><div class=\"ti-lab\">Hist</div><div\
+    \ class=\"ti-val\" id=\"macd-h\">—</div></div>
+        <div class=\"ti-box\"\
+    ><div class=\"ti-lab\">Trend</div><div class=\"ti-val\" id=\"macd-t\">—</div></div>
+\
+    \      </div>
+      <div class=\"ti-label\" style=\"margin-top:10px\">52-Week\
+    \ Range</div>
+      <div class=\"range-wrap\">
+        <span class=\"range-lo\"\
+    \ id=\"rng-lo\">—</span>
+        <div class=\"range-track\" id=\"rng-track\"\
+    >
+          <div class=\"range-dot\" id=\"rng-dot\" style=\"left:50%\"></div>
+\
+    \        </div>
+        <span class=\"range-hi\" id=\"rng-hi\">—</span>
+   \
+    \   </div>
+      <div class=\"range-pct\" id=\"rng-pct\"></div>
+    </div>
+\
+    \    <!-- Analyst Ratings -->
+    <div class=\"dp-section\">
+      <div class=\"\
+    dp-title\">Analyst Ratings</div>
+      <div class=\"analyst-grid\" id=\"analyst-grid\"\
+    >
+        <div class=\"analyst-pill ap-sb\"><div class=\"ap-cnt\" id=\"an-sb\"\
+    >—</div><div class=\"ap-lab\">St.Buy</div></div>
+        <div class=\"analyst-pill\
+    \ ap-b\"><div class=\"ap-cnt\" id=\"an-b\">—</div><div class=\"ap-lab\">Buy</div></div>
+\
+    \        <div class=\"analyst-pill ap-h\"><div class=\"ap-cnt\" id=\"an-h\">—</div><div\
+    \ class=\"ap-lab\">Hold</div></div>
+        <div class=\"analyst-pill ap-s\"\
+    ><div class=\"ap-cnt\" id=\"an-s\">—</div><div class=\"ap-lab\">Sell</div></div>
+\
+    \        <div class=\"analyst-pill ap-ss\"><div class=\"ap-cnt\" id=\"an-ss\"\
+    >—</div><div class=\"ap-lab\">St.Sell</div></div>
+      </div>
+      <div class=\"\
+    analyst-bar\"><div class=\"ab-buy\" id=\"ab-buy\"></div><div class=\"ab-hold\"\
+    \ id=\"ab-hold\"></div><div class=\"ab-sell\" id=\"ab-sell\"></div></div>
+  \
+    \    <div class=\"analyst-target\" id=\"analyst-target\"></div>
+      <div id=\"\
+    analyst-rec\"></div>
+      <div class=\"earnings-row\" id=\"earnings-row\"></div>
+\
+    \    </div>
+    <!-- Social Feed -->
+    <div class=\"dp-section\" id=\"social-section\"\
+    \ style=\"display:none\">
+      <div class=\"dp-title\">📊 Social Sentiment\
+    \ <span style=\"font-size:9px;color:#8b949e;font-weight:400;text-transform:none;letter-spacing:0\"\
+    >via StockTwits</span></div>
+      <div id=\"social-content\"><div class=\"ss-loading\"\
+    >Loading…</div></div>
+    </div>
+
+    <!-- Migration status -->
+    <div class=\"\
+    dp-section\">
+      <div class=\"dp-title\"><span class=\"live-dot\"></span>Live\
+    \ Pod</div>
+      <div class=\"mig-row\"><span class=\"mig-key\">Host</span><span\
+    \ class=\"mig-val\" id=\"m-host\">—</span></div>
+      <div class=\"mig-row\"\
+    ><span class=\"mig-key\">Pod IP</span><span class=\"mig-val\" id=\"m-ip\">—</span></div>
+\
+    \      <div class=\"mig-row\"><span class=\"mig-key\">Node</span><span class=\"\
+    mig-val\" id=\"m-node\">—</span></div>
+      <div class=\"mig-row\"><span class=\"\
+    mig-key\">Uptime</span><span class=\"mig-val\" id=\"m-up\">0s</span></div>
+ \
+    \   </div>
+  </div>
+</div>
+
+<script>
+const API = '/api';
+let stocks = {};
+\
+    let sel = null;
+let chart = null;
+
+// Currency symbol helper — uses stored\
+    \ currency from API, falls back to .TA heuristic
+const CCY_MAP = { USD:'$', ILS:'₪',\
+    \ ILA:'₪', EUR:'€', GBP:'£', JPY:'¥', CAD:'$', AUD:'$' };
+function ccy(sym) {
+\
+    \  const d = stocks[sym];
+  if (d && d.currency && CCY_MAP[d.currency]) return\
+    \ CCY_MAP[d.currency];
+  return sym && sym.endsWith('.TA') ? '₪' : '$';
+}
+\
+    // Display name — strip .TA suffix for cleaner watchlist
+function dispSym(sym)\
+    \ {
+  if (!sym) return sym;
+  if (sym.endsWith('.TA')) return sym.slice(0, -3);
+\
+    \  if (sym.endsWith('-USD')) return sym.slice(0, -4);
+  const M = {'GC=F':'GOLD','SI=F':'SILVER','CL=F':'OIL','NG=F':'GAS','HG=F':'COPPER',
+\
+    \             'ILS=X':'USD/ILS','EURUSD=X':'EUR/USD','GBPUSD=X':'GBP/USD','JPY=X':'USD/JPY'};
+\
+    \  return M[sym] || sym;
+}
+
+// ── Stock Search Engine ────────────────────────────────────────────
+\
+    const FLAG = { US:'🇺🇸', IL:'🇮🇱', NL:'🇳\
+    🇱', DE:'🇩🇪', CA:'🇨🇦', SE:'🇸\
+    🇪', GB:'🇬🇧',
+               JP:'🇯🇵\
+    ', AU:'🇦🇺', EU:'🇪🇺', IE:'🇮🇪\
+    ', Global:'🌐' };
+let searchTimer = null;
+let dropFocus   = -1;
+let\
+    \ dropItems   = [];
+let _catalogCache = [];
+
+const searchInp  = document.getElementById('search-inp');
+\
+    const searchDrop = document.getElementById('search-drop');
+
+function closeSearch()\
+    \ {
+  searchDrop.classList.remove('open');
+  dropFocus = -1;
+  dropItems =\
+    \ [];
+}
+
+function renderDropdown(results, sectionLabel) {
+  if (!results.length)\
+    \ { closeSearch(); return; }
+  dropItems = results;
+  dropFocus = -1;
+  let\
+    \ html = sectionLabel ? `<div class=\"search-section\">${sectionLabel}</div>`\
+    \ : '';
+  html += results.map((r, i) => {
+    const flag   = FLAG[r.country]\
+    \ || '🌐';
+    const wl     = r.in_watchlist ? '<span class=\"si-wl-tag\"\
+    >✓ In watchlist</span>' : '<span class=\"si-add-hint\">↵ Add</span>';
+    const\
+    \ cls    = r.in_watchlist ? ' in-wl' : '';
+    return `<div class=\"search-item${cls}\"\
+    \ data-i=\"${i}\" onpointerdown=\"pickFromDrop(${i})\">
+      <span class=\"\
+    si-flag\">${flag}</span>
+      <span class=\"si-sym\">${r.symbol}</span>
+  \
+    \    <span class=\"si-name\">${r.name}</span>
+      <span class=\"si-exch\">${r.exchange}</span>
+\
+    \      <span class=\"si-sec\">${r.sector||''}</span>
+      ${wl}
+    </div>`;
+\
+    \  }).join('');
+  searchDrop.innerHTML = html;
+  searchDrop.classList.add('open');
+\
+    }
+
+async function doSearch(q) {
+  if (q.length < 1) { showPopular(); return;\
+    \ }
+  try {
+    const r = await fetch(API + '/search?q=' + encodeURIComponent(q));
+\
+    \    const d = await r.json();
+    renderDropdown(d.results || [], null);
+ \
+    \ } catch(e) { closeSearch(); }
+}
+
+async function showPopular() {
+  const\
+    \ POPULAR = ['AAPL','TSLA','NVDA','BTC-USD','ETH-USD','GC=F','MSFT','AMZN','META','GOOGL','ILS=X','SI=F'];
+\
+    \  const wl = new Set(Object.keys(stocks));
+  const items = POPULAR.map(sym =>\
+    \ {
+    const found = _catalogCache.find(c => c.symbol === sym);
+    return\
+    \ found ? {...found, in_watchlist: wl.has(sym)} : null;
+  }).filter(Boolean);
+\
+    \  renderDropdown(items, '⭐ Popular');
+}
+
+searchInp.addEventListener('focus',\
+    \ () => {
+  if (!searchInp.value.trim()) showPopular();
+});
+
+searchInp.addEventListener('input',\
+    \ e => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+ \
+    \ if (!q) { showPopular(); return; }
+  searchTimer = setTimeout(() => doSearch(q),\
+    \ 180);
+});
+
+searchInp.addEventListener('keydown', e => {
+  if (!searchDrop.classList.contains('open'))\
+    \ return;
+  const items = searchDrop.querySelectorAll('.search-item');
+  if\
+    \ (e.key === 'ArrowDown') {
+    e.preventDefault();
+    dropFocus = Math.min(dropFocus\
+    \ + 1, items.length - 1);
+    items.forEach((el,i) => el.classList.toggle('focused',\
+    \ i === dropFocus));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+\
+    \    dropFocus = Math.max(dropFocus - 1, 0);
+    items.forEach((el,i) => el.classList.toggle('focused',\
+    \ i === dropFocus));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+\
+    \    if (dropFocus >= 0 && dropItems[dropFocus]) pickFromDrop(dropFocus);
+  \
+    \  else if (dropItems[0]) pickFromDrop(0);
+  } else if (e.key === 'Escape') {
+\
+    \    closeSearch();
+  }
+});
+
+document.addEventListener('click', e => {
+ \
+    \ if (!document.getElementById('search-wrap').contains(e.target)) closeSearch();
+\
+    });
+
+async function pickFromDrop(i) {
+  const item = dropItems[i];
+  if (!item)\
+    \ return;
+  closeSearch();
+  searchInp.value = '';
+  await addStockBySymbol(item.symbol);
+\
+    }
+
+async function addStockBySymbol(sym) {
+  if (stocks[sym]) { selectStock(sym);\
+    \ return; }
+  stocks[sym] = { symbol: sym, loading: true };
+  renderWatchlist();
+\
+    \  try {
+    const r = await fetch(API + '/stocks/add', {
+      method: 'POST',\
+    \ headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({\
+    \ symbol: sym })
+    });
+    const j = await r.json();
+    if (j.status ===\
+    \ 'error') {
+      delete stocks[sym];
+      renderWatchlist();
+      alert('Symbol\
+    \ not found: ' + sym);
+    }
+  } catch(e) { console.error(e); }
+}
+
+// Clock
+\
+    function tick() {
+  const d = new Date();
+  document.getElementById('clock').textContent\
+    \ =
+    d.toLocaleTimeString('en-US',{hour12:false,timeZone:'America/New_York'})\
+    \ + ' ET';
+}
+setInterval(tick, 1000); tick();
+
+function fmt(n, dec=2) {
+\
+    \  if (n == null) return '—';
+  return parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+\
+    }
+function fmtVol(n) {
+  if (!n) return '—';
+  if (n >= 1e9) return (n/1e9).toFixed(1)+'B';
+\
+    \  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3) return (n/1e3).toFixed(0)+'K';
+\
+    \  return n;
+}
+function maInd(price, ma) {
+  if (!ma || !price) return '<span\
+    \ class=\"ma-ind ma-eq\">—</span>';
+  const diff = ((price - ma) / ma * 100).toFixed(1);
+\
+    \  const cls  = price > ma ? 'ma-up' : 'ma-dn';
+  const arr  = price > ma ? '▲'\
+    \ : '▼';
+  return `<span class=\"ma-ind ${cls}\">${arr}${Math.abs(diff)}%</span>`;
+\
+    }
+
+// Render watchlist
+function renderWatchlist() {
+  const body = document.getElementById('wl-body');
+\
+    \  let html = '';
+  for (const [sym, d] of Object.entries(stocks)) {
+    if\
+    \ (d.loading) {
+      html += `<div class=\"loading-row\">${sym}: Loading real\
+    \ data...</div>`;
+      continue;
+    }
+    const pos  = d.change >= 0;
+ \
+    \   const act  = sel === sym ? ' active' : '';
+    const c    = ccy(sym);
+ \
+    \   const badge = sym.endsWith('.TA')   ? '<span class=\"tase-badge\">TA</span>'
+\
+    \                : sym.endsWith('-USD') ? '<span class=\"tase-badge\" style=\"\
+    background:#f0883e22;color:#f0883e;border-color:#f0883e44\">₿</span>'
+      \
+    \          : sym.includes('=')   ? '<span class=\"tase-badge\" style=\"background:#58a6ff22;color:#58a6ff;border-color:#58a6ff44\"\
+    >FX</span>'
+                : '';
+    const label = dispSym(sym) + badge;
+\
+    \    html += `<div class=\"wl-row${act}\" onclick=\"selectStock('${sym}')\">
+\
+    \      <div><div class=\"sym\">${label}</div></div>
+      <div class=\"sname\"\
+    \ title=\"${d.name}\">${d.name||sym}</div>
+      <div class=\"price\">${c}${fmt(d.price)}</div>
+\
+    \      <div class=\"chg ${pos?'pos':'neg'}\">${pos?'+':''}${fmt(d.pct,2)}%</div>
+\
+    \      <div class=\"del-btn\" onclick=\"event.stopPropagation();removeStock('${sym}')\"\
+    >✕</div>
+    </div>`;
+  }
+  body.innerHTML = html || '<div class=\"loading-row\"\
+    >Loading stocks…</div>';
+}
+
+// Ticker bar
+function renderTicker() {
+  let\
+    \ t = '';
+  for (const [sym, d] of Object.entries(stocks)) {
+    if (d.loading)\
+    \ continue;
+    const pos = d.change >= 0;
+    const cls = pos ? 'tick-p' :\
+    \ 'tick-n';
+    t += `<div class=\"tick-item\"><strong>${dispSym(sym)}</strong>\
+    \ <span class=\"${cls}\">${ccy(sym)}${fmt(d.price)} ${pos?'+':''}${fmt(d.pct,2)}%</span></div>`;
+\
+    \  }
+  // Duplicate for seamless loop
+  const el = document.getElementById('ticker');
+\
+    \  el.innerHTML = `<div class=\"ticker-inner\">${t}${t}</div>`;
+}
+
+// Update\
+    \ selected stock header + chart price
+function updateChartHeader() {
+  if (!sel\
+    \ || !stocks[sel] || stocks[sel].loading) return;
+  const d = stocks[sel];
+\
+    \  const c = ccy(sel);
+  document.getElementById('ch-sym').textContent = `${dispSym(sel)}\
+    \ — ${d.name||''}`;
+  document.getElementById('ch-price').textContent = c + fmt(d.price);
+\
+    \  const pos = d.change >= 0;
+  const chg = document.getElementById('ch-chg');
+\
+    \  chg.textContent = `${pos?'+':''}${c}${fmt(Math.abs(d.change))} (${pos?'+':''}${fmt(d.pct,2)}%)`;
+\
+    \  chg.className = 'ch-chg ' + (pos ? 'pos' : 'neg');
+}
+
+// Fetch all stocks
+\
+    async function fetchStocks() {
+  try {
+    const r = await fetch(API + '/stocks');
+\
+    \    const d = await r.json();
+    for (const s of d.stocks) stocks[s.symbol]\
+    \ = s;
+    renderWatchlist();
+    renderTicker();
+    updateChartHeader();
+\
+    \    // Status
+    document.getElementById('m-host').textContent = d.hostname\
+    \ || '—';
+    document.getElementById('m-ip').textContent   = d.pod_ip   || '—';
+\
+    \    document.getElementById('m-node').textContent = (d.node||'').replace('.ec2.internal','');
+\
+    \    document.getElementById('m-up').textContent   = d.uptime_s + 's';
+  } catch(e)\
+    \ { /* retry next poll */ }
+}
+
+// Select stock → fetch detail + render chart\
+    \ + fundamentals + social
+async function selectStock(sym) {
+  sel = sym;
+ \
+    \ renderWatchlist();
+  document.getElementById('chart-empty').style.display =\
+    \ 'none';
+  // Hide social feed while loading
+  document.getElementById('social-section').style.display\
+    \ = 'none';
+  // On mobile: scroll chart into view after selection
+  if (window.innerWidth\
+    \ <= 767) {
+    setTimeout(() => document.querySelector('.chart-area')
+    \
+    \  .scrollIntoView({behavior:'smooth', block:'start'}), 80);
+  }
+  try {
+ \
+    \   const r = await fetch(API + '/stock/' + sym);
+    if (!r.ok) { document.getElementById('chart-empty').textContent\
+    \ = 'Loading data…'; return; }
+    const d = await r.json();
+    updateChartHeader();
+\
+    \    renderChart(d);
+    renderFundamentals(d.fundamentals || {});
+    renderTechnicals(d);
+\
+    \    renderAnalyst(d.fundamentals || {});
+  } catch(e) { console.error(e); }
+\
+    \  // Load social feed in parallel (non-blocking)
+  fetchSocial(sym);
+}
+
+\
+    // ── Social Feed (StockTwits) ───────────────────────────────────────
+async\
+    \ function fetchSocial(sym) {
+  const section = document.getElementById('social-section');
+\
+    \  const content = document.getElementById('social-content');
+  section.style.display\
+    \ = '';
+  content.innerHTML = '<div class=\"ss-loading\">Fetching social posts…</div>';
+\
+    \  try {
+    const r = await fetch(API + '/social/' + encodeURIComponent(sym));
+\
+    \    if (!r.ok) { content.innerHTML = '<div class=\"ss-loading\">No social data\
+    \ available</div>'; return; }
+    const d = await r.json();
+    if (!d.messages\
+    \ || !d.messages.length) {
+      content.innerHTML = `<div class=\"ss-loading\"\
+    >No recent posts for ${dispSym(sym)}</div>`;
+      return;
+    }
+    const\
+    \ neutral = d.messages.length - d.bullish - d.bearish;
+    let html = `<div class=\"\
+    social-summary\">
+      <div class=\"ss-pill ss-bull\">🐂 ${d.bullish}\
+    \ Bullish</div>
+      <div class=\"ss-pill ss-bear\">🐻 ${d.bearish}\
+    \ Bearish</div>
+      ${neutral > 0 ? `<div class=\"ss-pill ss-neutral\">⬜ ${neutral}\
+    \ Neutral</div>` : ''}
+    </div>`;
+    html += '<div class=\"social-feed\"\
+    >';
+    html += d.messages.map(m => {
+      const sentHtml = m.sentiment ===\
+    \ 'Bullish'
+        ? '<span class=\"sm-sent sm-bull\">🐂 Bull</span>'
+\
+    \        : m.sentiment === 'Bearish'
+        ? '<span class=\"sm-sent sm-bear\"\
+    >🐻 Bear</span>'
+        : '';
+      let timeStr = '';
+      if (m.time)\
+    \ {
+        try {
+          const dt = new Date(m.time);
+          const now\
+    \ = new Date();
+          const diffMin = Math.round((now - dt) / 60000);
+ \
+    \         timeStr = diffMin < 60 ? diffMin + 'm ago'
+                  : diffMin\
+    \ < 1440 ? Math.round(diffMin/60) + 'h ago'
+                  : dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+\
+    \        } catch(e) {}
+      }
+      const escaped = m.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+\
+    \      return `<div class=\"social-msg\">
+        <div class=\"sm-header\">
+\
+    \          <span class=\"sm-user\">@${m.user}</span>
+          ${sentHtml}
+\
+    \          <span class=\"sm-time\">${timeStr}</span>
+        </div>
+       \
+    \ <div class=\"sm-body\">${escaped}</div>
+        ${m.likes > 0 ? `<div class=\"\
+    sm-likes\">❤ ${m.likes}</div>` : ''}
+      </div>`;
+    }).join('');
+    html\
+    \ += '</div>';
+    html += `<span class=\"ss-st-link\">Source: <a href=\"https://stocktwits.com/symbol/${d.st_sym}\"\
+    \ target=\"_blank\" rel=\"noopener\">StockTwits $${d.st_sym}</a></span>`;
+  \
+    \  content.innerHTML = html;
+  } catch(e) {
+    content.innerHTML = '<div class=\"\
+    ss-loading\">Social feed unavailable</div>';
+  }
+}
+
+// Chart.js price + MA\
+    \ chart
+function renderChart(d) {
+  const ctx = document.getElementById('priceChart').getContext('2d');
+\
+    \  if (chart) chart.destroy();
+  const c = d.chart || {};
+  const datasets =\
+    \ [
+    { label: 'Price', data: c.closes, borderColor: '#58a6ff', borderWidth:\
+    \ 2, pointRadius: 0, tension: 0.2, fill: false, order: 1 },
+    { label: 'MA\
+    \ 50',  data: c.ma50,  borderColor: '#f0883e', borderWidth: 1.5, borderDash: [],\
+    \ pointRadius: 0, tension: 0, fill: false, spanGaps: true },
+    { label: 'MA\
+    \ 100', data: c.ma100, borderColor: '#d2a8ff', borderWidth: 1.5, borderDash: [4,3],\
+    \ pointRadius: 0, tension: 0, fill: false, spanGaps: true },
+    { label: 'MA\
+    \ 150', data: c.ma150, borderColor: '#3fb950', borderWidth: 1.5, borderDash: [3,2],\
+    \ pointRadius: 0, tension: 0, fill: false, spanGaps: true },
+    { label: 'MA\
+    \ 200', data: c.ma200, borderColor: '#f85149', borderWidth: 1.5, borderDash: [6,3],\
+    \ pointRadius: 0, tension: 0, fill: false, spanGaps: true },
+  ];
+  // Update\
+    \ legend values
+  const cc = ccy(sel);
+  document.getElementById('leg-price').textContent\
+    \ = 'Price ' + cc + fmt(d.price);
+  document.getElementById('leg-50').textContent\
+    \    = 'MA 50 '  + (d.ma50  ? cc+fmt(d.ma50)  : '—');
+  document.getElementById('leg-100').textContent\
+    \   = 'MA 100 ' + (d.ma100 ? cc+fmt(d.ma100) : '—');
+  document.getElementById('leg-150').textContent\
+    \   = 'MA 150 ' + (d.ma150 ? cc+fmt(d.ma150) : '—');
+  document.getElementById('leg-200').textContent\
+    \   = 'MA 200 ' + (d.ma200 ? cc+fmt(d.ma200) : '—');
+  chart = new Chart(ctx,\
+    \ {
+    type: 'line',
+    data: { labels: c.dates || [], datasets },
+    options:\
+    \ {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration:\
+    \ 300 },
+      interaction: { mode: 'index', intersect: false },
+      plugins:\
+    \ {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor:\
+    \ '#161b22', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#8b949e',\
+    \ bodyColor: '#e6edf3',
+          callbacks: { label: ctx => ` ${ctx.dataset.label}:\
+    \ ${ccy(sel)}${fmt(ctx.parsed.y)}` }
+        }
+      },
+      scales: {
+ \
+    \       x: {
+          grid: { color: '#21262d' }, ticks: { color: '#8b949e',\
+    \ maxTicksLimit: 8, font: { size: 10 } },
+          ticks: { callback: (v, i,\
+    \ vals) => { const d = (c.dates||[])[i]; return d ? d.slice(5) : ''; }, maxTicksLimit:\
+    \ 8, color: '#8b949e' }
+        },
+        y: {
+          grid: { color: '#21262d'\
+    \ }, ticks: { color: '#8b949e', font: { size: 10 },
+          callback: v =>\
+    \ '$' + v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})\
+    \ }
+        }
+      }
+    }
+  });
+}
+
+// Render fundamentals
+function renderFundamentals(f)\
+    \ {
+  const set = (id, val, suf='') => { document.getElementById(id).textContent\
+    \ = val != null ? val + suf : '—'; };
+  set('f-cap',    f.market_cap);
+  set('f-pe',\
+    \     f.trailing_pe);
+  set('f-fpe',    f.forward_pe);
+  set('f-eps',    f.eps\
+    \ != null ? '$'+fmt(f.eps) : null);
+  set('f-52h',    f.high_52w != null ? '$'+fmt(f.high_52w)\
+    \ : null);
+  set('f-52l',    f.low_52w  != null ? '$'+fmt(f.low_52w)  : null);
+\
+    \  set('f-div',    f.div_yield != null ? f.div_yield+'%' : null);
+  set('f-beta',\
+    \   f.beta);
+  set('f-pb',     f.pb);
+  set('f-margin', f.profit_margin != null\
+    \ ? f.profit_margin+'%' : null);
+  const sec = document.getElementById('f-sector');
+\
+    \  sec.innerHTML = f.sector && f.sector !== '—'
+    ? `<div class=\"sector-badge\"\
+    >${f.sector}</div><span style=\"font-size:10px;color:#8b949e;margin-left:6px\"\
+    >${f.industry||''}</span>` : '';
+  document.getElementById('f-desc').textContent\
+    \ = f.description || '';
+}
+
+function renderTechnicals(d) {
+  const c = ccy(sel);
+\
+    \  const f = d.fundamentals || {};
+  // ── RSI ──
+  const rsi = d.rsi;
+  if\
+    \ (rsi != null) {
+    const pct = Math.min(Math.max(rsi, 0), 100);
+    document.getElementById('rsi-marker').style.left\
+    \ = pct + '%';
+    document.getElementById('rsi-num').textContent = rsi.toFixed(1);
+\
+    \    const lbl = document.getElementById('rsi-lbl');
+    if (rsi < 30)      \
+    \ { lbl.textContent = 'Oversold';   lbl.className = 'rsi-label rsi-os'; }
+  \
+    \  else if (rsi > 70)  { lbl.textContent = 'Overbought'; lbl.className = 'rsi-label\
+    \ rsi-ob'; }
+    else                { lbl.textContent = 'Neutral';    lbl.className\
+    \ = 'rsi-label rsi-neu'; }
+    document.getElementById('rsi-num').style.color\
+    \ = rsi < 30 ? '#3fb950' : rsi > 70 ? '#f85149' : '#e6edf3';
+  }
+  // ── MACD\
+    \ ──
+  const m = d.macd_data;
+  if (m) {
+    const pos = v => v > 0 ? '#3fb950'\
+    \ : '#f85149';
+    document.getElementById('macd-v').textContent = m.macd;
+\
+    \    document.getElementById('macd-v').style.color = pos(m.macd);
+    document.getElementById('macd-s').textContent\
+    \ = m.signal;
+    document.getElementById('macd-s').style.color = pos(m.signal);
+\
+    \    document.getElementById('macd-h').textContent = m.hist;
+    document.getElementById('macd-h').style.color\
+    \ = pos(m.hist);
+    const t = document.getElementById('macd-t');
+    t.textContent\
+    \ = m.trend === 'bullish' ? '▲ Bull' : '▼ Bear';
+    t.style.color = m.trend\
+    \ === 'bullish' ? '#3fb950' : '#f85149';
+  }
+  // ── 52W Range ──
+  const lo\
+    \ = f.low_52w, hi = f.high_52w, p = d.price;
+  if (lo && hi && p && hi > lo)\
+    \ {
+    const pct = Math.min(Math.max((p - lo) / (hi - lo) * 100, 2), 98);
+\
+    \    document.getElementById('rng-lo').textContent = c + fmt(lo);
+    document.getElementById('rng-hi').textContent\
+    \ = c + fmt(hi);
+    document.getElementById('rng-dot').style.left  = pct + '%';
+\
+    \    const fromHi = ((hi - p) / hi * 100).toFixed(1);
+    document.getElementById('rng-pct').textContent\
+    \ = fromHi + '% from 52W High';
+  }
+}
+
+function renderAnalyst(f) {
+  if (!f\
+    \ || !f.rec) return;
+  const c = ccy(sel);
+  // Rating badge
+  const recMap\
+    \ = {
+    'strong_buy':'Strong Buy','buy':'Buy','hold':'Hold',
+    'underperform':'Underperform','sell':'Sell','strong_sell':'Strong\
+    \ Sell'
+  };
+  const clsMap = {
+    'strong_buy':'rec-strong-buy','buy':'rec-buy','hold':'rec-hold',
+\
+    \    'underperform':'rec-sell','sell':'rec-sell','strong_sell':'rec-strong-sell'
+\
+    \  };
+  const recKey = f.rec.toLowerCase().replace(/ /g,'_');
+  const recEl\
+    \  = document.getElementById('analyst-rec');
+  recEl.innerHTML = `<span class=\"\
+    analyst-rec-badge ${clsMap[recKey]||'rec-hold'}\">${recMap[recKey]||f.rec}</span>`;
+\
+    \  // Target price
+  if (f.target_mean) {
+    document.getElementById('analyst-target').innerHTML\
+    \ =
+      `Price Target: <strong style=\"color:#58a6ff\">${c}${fmt(f.target_mean)}</strong>`\
+    \ +
+      (f.target_low && f.target_high
+        ? ` <span style=\"color:#8b949e;font-size:11px\"\
+    >( Low: ${c}${fmt(f.target_low)} / High: ${c}${fmt(f.target_high)} )</span>` :\
+    \ '');
+  }
+  // Analyst count bar (estimate from recommendationMean: 1=strong\
+    \ buy, 5=strong sell)
+  const mean = f.strong_buy;  // actually recommendationMean
+\
+    \  if (mean != null) {
+    const buyPct  = Math.max(0, Math.min(100, ((5 - mean)\
+    \ / 4) * 100));
+    const sellPct = Math.max(0, Math.min(100, ((mean - 1) / 4)\
+    \ * 100));
+    const holdPct = 100 - buyPct - sellPct;
+    document.getElementById('ab-buy').style.width\
+    \  = buyPct + '%';
+    document.getElementById('ab-hold').style.width = Math.max(holdPct,\
+    \ 0) + '%';
+    document.getElementById('ab-sell').style.width = sellPct + '%';
+\
+    \  }
+}
+
+// Remove stock
+async function removeStock(sym) {
+  if (!confirm(`Remove\
+    \ ${sym} from watchlist?`)) return;
+  delete stocks[sym];
+  if (sel === sym)\
+    \ { sel = null; if (chart) { chart.destroy(); chart = null; } }
+  renderWatchlist();
+\
+    \  try {
+    await fetch(API + '/stocks/' + sym, { method: 'DELETE' });
+  }\
+    \ catch(e) { console.error(e); }
+}
+
+
+// ── Our Recommendation section ────────────────────────────────────
+\
+    const REC_BADGE = {
+  strong_buy: ['STRONG BUY', 'rb-sb'],
+  buy:        ['BUY',\
+    \         'rb-b'],
+  hold:       ['HOLD',        'rb-h'],
+  underperform:['UNDERPERFORM','rb-s'],
+\
+    \  sell:       ['SELL',        'rb-s'],
+  strong_sell:['STRONG SELL', 'rb-s'],
+\
+    };
+
+async function fetchRecommendations() {
+  try {
+    const r = await fetch(API\
+    \ + '/recommendations');
+    if (!r.ok) return;
+    const d = await r.json();
+\
+    \    renderRecommendations(d.recommendations || [], d.ts);
+  } catch(e) { console.error('rec\
+    \ fetch:', e); }
+}
+
+function renderRecommendations(recs, ts) {
+  const section\
+    \ = document.getElementById('rec-section');
+  const cards   = document.getElementById('rec-cards');
+\
+    \  const sub     = document.getElementById('rec-sub');
+  if (!recs.length) {\
+    \ section.style.display = 'none'; return; }
+  section.style.display = '';
+ \
+    \ // Update subtitle with timestamp
+  const ago = ts ? Math.round((Date.now()/1000\
+    \ - ts) / 60) : 0;
+  sub.textContent = ago < 2 ? 'Just updated' : `Updated ${ago}m\
+    \ ago`;
+
+  const wl = new Set(Object.keys(stocks));
+  cards.innerHTML = recs.map(r\
+    \ => {
+    const flag   = FLAG[r.currency === 'ILS' ? 'IL' : 'US'] || '🌐\
+    ';
+    const pos    = r.pct >= 0;
+    const c      = CCY_MAP[r.currency] ||\
+    \ '$';
+    const [btxt, bcls] = REC_BADGE[r.rec] || ['HOLD', 'rb-h'];
+    const\
+    \ upHtml = r.upside != null
+      ? `<div class=\"rc-upside${r.upside < 0 ? '\
+    \ negative' : ''}\">
+          ${r.upside >= 0 ? '↑' : '↓'} ${Math.abs(r.upside)}%\
+    \ to target
+         </div>`
+      : '';
+    const socialHtml = r.social_rank
+\
+    \      ? `<span class=\"rc-social\">📊 #${r.social_rank}</span>`
+   \
+    \   : '';
+    const inWl   = wl.has(r.symbol);
+    const addBtn = inWl
+   \
+    \   ? `<button class=\"rc-add added\" disabled>✓ In Watchlist</button>`
+    \
+    \  : `<button class=\"rc-add\" onclick=\"event.stopPropagation();recAdd('${r.symbol}')\"\
+    >+ Add to Watchlist</button>`;
+    return `<div class=\"rec-card\" onclick=\"\
+    recClick('${r.symbol}')\">
+      <div class=\"rc-top\">
+        <span class=\"\
+    rc-flag\">${flag}</span>
+        <span class=\"rc-sym\">${dispSym(r.symbol)}</span>
+\
+    \        ${socialHtml}
+      </div>
+      <div class=\"rc-name\" title=\"${r.name}\"\
+    >${r.name}</div>
+      <div class=\"rc-price-row\">
+        <span class=\"rc-price\"\
+    >${c}${fmt(r.price)}</span>
+        <span class=\"rc-pct ${pos?'up':'dn'}\">${pos?'+':''}${fmt(r.pct,2)}%</span>
+\
+    \      </div>
+      <div class=\"rc-badge ${bcls}\">${btxt}</div>
+      ${upHtml}
+\
+    \      <div class=\"rc-meta\">${r.analysts ? r.analysts + ' analysts' : ''} ${r.sector\
+    \ ? '· ' + r.sector : ''}</div>
+      ${addBtn}
+    </div>`;
+  }).join('');
+\
+    }
+
+async function recAdd(sym) {
+  await addStockBySymbol(sym);
+  // Re-render\
+    \ to update button state
+  fetchRecommendations();
+}
+
+function recClick(sym)\
+    \ {
+  if (stocks[sym]) { selectStock(sym); return; }
+  recAdd(sym);
+}
+
+//\
+    \ Boot — load full catalog once for instant Popular list
+async function bootCatalog()\
+    \ {
+  try {
+    const r = await fetch(API + '/catalog');
+    const d = await\
+    \ r.json();
+    _catalogCache = d.catalog || [];
+  } catch(e) {}
+}
+fetchStocks();
+\
+    setInterval(fetchStocks, 8000);
+bootCatalog();
+// Delay recommendations slightly\
+    \ so initial stocks load first
+setTimeout(() => {
+  fetchRecommendations();
+\
+    \  setInterval(fetchRecommendations, 5 * 60 * 1000);  // refresh every 5 min
+\
+    }, 4000);
+</script>
+</body>
+</html>
+"
+  nginx.conf: "server {
+  listen 80;
+  root /usr/share/nginx/html;
+  index index.html;
+\
+    \  location /api/ {
+    proxy_pass http://10.100.162.45:8080/api/;
+    proxy_set_header\
+    \ Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_read_timeout\
+    \ 60;
+    proxy_http_version 1.1;
+  }
+  location / { try_files $uri $uri/ /index.html;\
+    \ }
+}
+"
+kind: ConfigMap
+metadata:
+  name: stock-frontend-html
+  namespace: stock-app
+
+---
+apiVersion: v1
+data:
+  app.py: "import os, time, threading, random
+from flask import Flask, jsonify
+\
+    from flask_cors import CORS
+app   = Flask(__name__)
+CORS(app)
+request_count\
+    \ = int(os.environ.get(\"RESTORED_RC\",\"0\"))
+trade_count   = int(os.environ.get(\"\
+    RESTORED_TC\",\"0\"))
+pnl_total     = float(os.environ.get(\"RESTORED_PNL\",\"\
+    0.0\"))
+start_time    = time.time()
+lock          = threading.Lock()
+STOCKS\
+    \ = {
+    \"AAPL\": {\"name\":\"Apple Inc\",      \"price\":189.50,\"prev\":187.20},
+\
+    \    \"TSLA\": {\"name\":\"Tesla Inc\",       \"price\":248.30,\"prev\":245.10},
+\
+    \    \"NVDA\": {\"name\":\"NVIDIA Corp\",     \"price\":875.20,\"prev\":862.40},
+\
+    \    \"AMZN\": {\"name\":\"Amazon.com Inc\",  \"price\":178.90,\"prev\":176.30},
+\
+    \    \"MSFT\": {\"name\":\"Microsoft Corp\",  \"price\":415.80,\"prev\":413.20},
+\
+    \    \"GOOG\": {\"name\":\"Alphabet Inc\",    \"price\":175.40,\"prev\":174.10},
+\
+    \    \"META\": {\"name\":\"Meta Platforms\",  \"price\":512.30,\"prev\":508.70},
+\
+    \    \"JPM\":  {\"name\":\"JPMorgan Chase\",  \"price\":198.50,\"prev\":196.20},
+\
+    }
+prices    = {k: v[\"price\"] for k, v in STOCKS.items()}
+price_lock = threading.Lock()
+\
+    def sim():
+    while True:
+        time.sleep(1)
+        with price_lock:
+\
+    \            for s in prices:
+                prices[s] = max(1.0, prices[s]\
+    \ * (
+                    1 + 0.0001*(random.random()-0.48) + 0.003*random.gauss(0,1)))
+\
+    threading.Thread(target=sim, daemon=True).start()
+@app.route(\"/health\")
+def\
+    \ health():
+    return \"ok\"
+@app.route(\"/api/stocks\")
+def get_stocks():
+\
+    \    global request_count
+    with lock:
+        request_count += 1
+      \
+    \  rc = request_count
+    with price_lock:
+        result = []
+        for\
+    \ sym, info in STOCKS.items():
+            p    = prices[sym]
+            prev\
+    \ = info[\"prev\"]
+            chg  = p - prev
+            pct  = (chg / prev)\
+    \ * 100
+            result.append({
+                \"symbol\":sym,\"name\"\
+    :info[\"name\"],
+                \"price\":round(p,2),\"change\":round(chg,2),\"\
+    pct\":round(pct,2),
+                \"volume\":random.randint(1000000,50000000)
+\
+    \            })
+    return jsonify({
+        \"stocks\":         sorted(result,\
+    \ key=lambda x: x[\"symbol\"]),
+        \"request_count\":  rc,
+        \"uptime_s\"\
+    :       round(time.time()-start_time, 1),
+        \"pod_ip\":         os.environ.get(\"\
+    POD_IP\",\"\"),
+        \"node\":           os.environ.get(\"NODE_NAME\",\"\"\
+    ),
+        \"hostname\":       os.environ.get(\"HOSTNAME\",\"\"),
+        \"\
+    pid\":            os.getpid(),
+    })
+@app.route(\"/api/trade\", methods=[\"\
+    POST\"])
+def trade():
+    global trade_count, pnl_total
+    with lock:
+  \
+    \      trade_count += 1
+        pnl_total   += random.uniform(-500, 800)
+  \
+    \      tc  = trade_count
+        pnl = pnl_total
+    return jsonify({\"trades\"\
+    : tc, \"pnl\": round(pnl, 2)})
+@app.route(\"/api/status\")
+def status():
+ \
+    \   with lock:
+        rc  = request_count
+        tc  = trade_count
+     \
+    \   pnl = pnl_total
+    return jsonify({
+        \"request_count\": rc,
+  \
+    \      \"trade_count\":   tc,
+        \"pnl_total\":     round(pnl, 2),
+   \
+    \     \"uptime_s\":      round(time.time()-start_time, 1),
+        \"pod_ip\"\
+    :        os.environ.get(\"POD_IP\",\"\"),
+        \"node\":          os.environ.get(\"\
+    NODE_NAME\",\"\"),
+        \"hostname\":      os.environ.get(\"HOSTNAME\",\"\"\
+    ),
+        \"pid\":           os.getpid(),
+    })
+print(f\"RESTORED backend\
+    \ | rc={request_count} tc={trade_count} pnl={pnl_total}\"
+      f\" | node={os.environ.get('NODE_NAME','')}\
+    \ ip={os.environ.get('POD_IP','')}\", flush=True)
+app.run(host=\"0.0.0.0\", port=8080)
+"
+  migrate.py: "import os, time, json, ssl, urllib.request, sys
+NS      = \"stock-app\"\
+    
+K8S_API = (\"https://\" + os.environ.get(\"KUBERNETES_SERVICE_HOST\",\"10.100.0.1\"\
+    )
+           + \":\" + os.environ.get(\"KUBERNETES_SERVICE_PORT\",\"443\"))
+\
+    SA_TOK  = open(\"/var/run/secrets/kubernetes.io/serviceaccount/token\").read().strip()
+\
+    def sslctx():
+    c = ssl.create_default_context()
+    c.load_verify_locations(\"\
+    /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\")
+    return c
+def kget(p):
+\
+    \    r = urllib.request.Request(K8S_API+p, headers={\"Authorization\":\"Bearer\
+    \ \"+SA_TOK})
+    with urllib.request.urlopen(r, context=sslctx(), timeout=30)\
+    \ as h:
+        return json.loads(h.read())
+def kpost(p, b):
+    d = json.dumps(b).encode()
+\
+    \    r = urllib.request.Request(K8S_API+p, data=d, method=\"POST\",
+        headers={\"\
+    Authorization\":\"Bearer \"+SA_TOK,\"Content-Type\":\"application/json\"})
+ \
+    \   with urllib.request.urlopen(r, context=sslctx(), timeout=120) as h:
+    \
+    \    return json.loads(h.read())
+def kdel(p):
+    r = urllib.request.Request(K8S_API+p,\
+    \ method=\"DELETE\",
+        headers={\"Authorization\":\"Bearer \"+SA_TOK})
+\
+    \    with urllib.request.urlopen(r, context=sslctx(), timeout=30) as h:
+    \
+    \    return h.read()
+def kpatch(p, b):
+    d = json.dumps(b).encode()
+    r\
+    \ = urllib.request.Request(K8S_API+p, data=d, method=\"PATCH\",
+        headers={\"\
+    Authorization\":\"Bearer \"+SA_TOK,
+                 \"Content-Type\":\"application/strategic-merge-patch+json\"\
+    })
+    with urllib.request.urlopen(r, context=sslctx(), timeout=30) as h:
+ \
+    \       return json.loads(h.read())
+def sep(t=\"\"):
+    print(\"\n\" + \"\
+    =\"*62 + (\"  \"+t if t else \"\"), flush=True)
+sep(\"STOCK-BACKEND LIVE MIGRATION\
+    \ WITH KUBE-OVN IP PRESERVATION\")
+sep(\"Step 1: Locate source pod\")
+pods =\
+    \ kget(f\"/api/v1/namespaces/{NS}/pods\"
+            \"?labelSelector=app%3Dstock-backend%2Cmigration-role%3Dsource\"\
+    )[\"items\"]
+if not pods:
+    print(\"ERROR: No pod with app=stock-backend,migration-role=source\"\
+    , flush=True)
+    sys.exit(1)
+src      = pods[0]
+src_name = src[\"metadata\"\
+    ][\"name\"]
+src_node = src[\"spec\"][\"nodeName\"]
+src_ip   = src[\"status\"\
+    ].get(\"podIP\",\"?\")
+ctr_name = src[\"spec\"][\"containers\"][0][\"name\"]
+\
+    svc      = kget(f\"/api/v1/namespaces/{NS}/services/stock-backend-svc\")
+svc_ip\
+    \   = svc[\"spec\"][\"clusterIP\"]
+print(f\"  pod={src_name}  node={src_node}\
+    \  ip={src_ip}\", flush=True)
+print(f\"  svc-ip={svc_ip}\", flush=True)
+sep(\"\
+    Step 2: Pre-migration state snapshot\")
+pre = {\"request_count\":0,\"trade_count\"\
+    :0,\"pnl_total\":0.0,\"uptime_s\":0}
+try:
+    h   = urllib.request.urlopen(f\"\
+    http://{svc_ip}:8080/api/status\", timeout=5)
+    pre = json.loads(h.read())
+\
+    \    print(f\"  requests={pre['request_count']} trades={pre['trade_count']} pnl=${pre['pnl_total']}\"\
+    , flush=True)
+except Exception as e:
+    print(f\"  Warning: {e}\", flush=True)
+\
+    sep(\"Step 3: CRIU Checkpoint\")
+ckpt_path = \"\"
+try:
+    url = K8S_API +\
+    \ f\"/api/v1/nodes/{src_node}/proxy/checkpoint/{NS}/{src_name}/{ctr_name}\"
+\
+    \    req = urllib.request.Request(url, method=\"POST\", headers={\"Authorization\"\
+    :\"Bearer \"+SA_TOK})
+    with urllib.request.urlopen(req, context=sslctx(),\
+    \ timeout=120) as h:
+        ckpt_path = json.loads(h.read()).get(\"items\",[\"\
+    \"])[0]
+    print(f\"  Checkpoint: {ckpt_path}\", flush=True)
+except Exception\
+    \ as e:
+    print(f\"  Checkpoint: {e} (semantic fallback)\", flush=True)
+sep(\"\
+    Step 4: Select target node\")
+nodes = kget(\"/api/v1/nodes\")[\"items\"]
+def\
+    \ score(n):
+    if n[\"metadata\"][\"name\"] == src_node: return -1
+    pods\
+    \ = int(n[\"status\"][\"allocatable\"].get(\"pods\",\"0\"))
+    return pods if\
+    \ pods >= 3 else -1
+best = max((n for n in nodes if score(n) >= 0), key=score,\
+    \ default=None)
+if not best:
+    best = next((n for n in nodes if n[\"metadata\"\
+    ][\"name\"] != src_node), None)
+tgt_node = best[\"metadata\"][\"name\"]
+print(f\"\
+    \  target={tgt_node}\", flush=True)
+sep(\"Step 5: Freeze source pod\")
+try:
+\
+    \    kpatch(f\"/api/v1/namespaces/{NS}/pods/{src_name}\",
+           {\"metadata\"\
+    :{\"labels\":{\"migration-role\":\"migrating\"}}})
+    print(f\"  label -> migrating\
+    \ (service stops routing)\", flush=True)
+except Exception as e:
+    print(f\"\
+    \  patch: {e}\", flush=True)
+kdel(f\"/api/v1/namespaces/{NS}/pods/{src_name}?gracePeriodSeconds=0\"\
+    )
+print(f\"  deleted {src_name}\", flush=True)
+sep(\"Step 6: Create restored\
+    \ pod (Kube-OVN IP annotation)\")
+ts       = int(time.time())
+new_name = f\"\
+    stock-backend-r-{ts}\"
+pod = {
+    \"apiVersion\":\"v1\",\"kind\":\"Pod\",
+\
+    \    \"metadata\":{
+        \"name\":new_name,\"namespace\":NS,
+        \"labels\"\
+    :{\"app\":\"stock-backend\",\"migration-role\":\"restored\",\"tier\":\"backend\"\
+    },
+        \"annotations\":{
+            \"ovn.kubernetes.io/ip_address\": src_ip,
+\
+    \        }
+    },
+    \"spec\":{
+        \"nodeName\":tgt_node,\"restartPolicy\"\
+    :\"Never\",
+        \"containers\":[{
+            \"name\":\"backend\",\"image\"\
+    :\"python:3.11-slim\",
+            \"command\":[\"sh\",\"-c\",
+            \
+    \    \"pip install flask flask-cors yfinance pandas --quiet 2>/dev/null && python3\
+    \ /scripts/app.py\"],
+            \"ports\":[{\"containerPort\":8080}],
+   \
+    \         \"env\":[
+                {\"name\":\"NODE_NAME\",\"valueFrom\":{\"\
+    fieldRef\":{\"fieldPath\":\"spec.nodeName\"}}},
+                {\"name\":\"\
+    POD_IP\",\"valueFrom\":{\"fieldRef\":{\"fieldPath\":\"status.podIP\"}}},
+   \
+    \             {\"name\":\"RESTORED_RC\",\"value\":str(pre[\"request_count\"])},
+\
+    \                {\"name\":\"RESTORED_TC\",\"value\":str(pre[\"trade_count\"])},
+\
+    \                {\"name\":\"RESTORED_PNL\",\"value\":str(pre[\"pnl_total\"])},
+\
+    \            ],
+            \"resources\":{\"requests\":{\"cpu\":\"10m\",\"memory\"\
+    :\"128Mi\"},\"limits\":{\"cpu\":\"500m\",\"memory\":\"256Mi\"}},
+           \
+    \ \"readinessProbe\":{\"httpGet\":{\"path\":\"/health\",\"port\":8080},\"initialDelaySeconds\"\
+    :30,\"periodSeconds\":5},
+            \"volumeMounts\":[{\"name\":\"scripts\"\
+    ,\"mountPath\":\"/scripts\"}]
+        }],
+        \"volumes\":[{\"name\":\"\
+    scripts\",\"configMap\":{\"name\":\"stock-backend-config\"}}]
+    }
+}
+kpost(f\"\
+    /api/v1/namespaces/{NS}/pods\", pod)
+print(f\"  created {new_name} on {tgt_node}\"\
+    , flush=True)
+print(f\"  annotation: ovn.kubernetes.io/ip_address={src_ip}\"\
+    , flush=True)
+sep(\"Step 7: Wait for restored pod Ready\")
+new_ip = \"pending\"\
+    
+for i in range(72):
+    time.sleep(5)
+    p     = kget(f\"/api/v1/namespaces/{NS}/pods/{new_name}\"\
+    )
+    phase = p[\"status\"].get(\"phase\",\"\")
+    ready = any(c[\"type\"]==\"\
+    Ready\" and c[\"status\"]==\"True\"
+                for c in p[\"status\"].get(\"\
+    conditions\",[]))
+    new_ip = p[\"status\"].get(\"podIP\",\"pending\")
+   \
+    \ print(f\"  [{(i+1)*5}s] phase={phase} ip={new_ip} ready={ready}\", flush=True)
+\
+    \    if ready:
+        print(\"  Pod is Ready!\", flush=True)
+        break
+\
+    sep(\"Step 8: Post-migration state check\")
+time.sleep(3)
+post = None
+try:
+\
+    \    h    = urllib.request.urlopen(f\"http://{svc_ip}:8080/api/status\", timeout=5)
+\
+    \    post = json.loads(h.read())
+    print(f\"  requests={post['request_count']}\
+    \ trades={post['trade_count']} pnl=${post['pnl_total']}\", flush=True)
+except\
+    \ Exception as e:
+    print(f\"  {e}\", flush=True)
+sep(\"FINAL MIGRATION REPORT\"\
+    )
+ip_ok    = (new_ip == src_ip)
+state_ok = post is not None and post[\"request_count\"\
+    ] >= pre[\"request_count\"]
+print(f\"\"\"
++----------------------------------------------------------+
+\
+    |              LIVE MIGRATION RESULT                       |
++----------------------------------------------------------+
+\
+    | Source   pod : {src_name:<40} |
+| Source   node: {src_node.replace('.ec2.internal',''):<40}\
+    \ |
+| Source   IP  : {src_ip:<40} |
++----------------------------------------------------------+
+\
+    | Restored pod : {new_name:<40} |
+| Target   node: {tgt_node.replace('.ec2.internal',''):<40}\
+    \ |
+| Restored IP  : {new_ip:<40} |
++----------------------------------------------------------+
+\
+    | CRIU checkpoint : {\"YES\" if ckpt_path else \"semantic fallback\"}
+| STATE\
+    \ PRESERVED : {\"YES - rc=\" + str(pre[\"request_count\"]) if state_ok else \"\
+    NO\"}
+| IP PRESERVED    : {\"YES (Kube-OVN annotation)\" if ip_ok else \"NO (annotation\
+    \ needs same subnet)\"}
+| SERVICE IP      : {svc_ip}
++----------------------------------------------------------+
+\
+    \"\"\", flush=True)
+"
+kind: ConfigMap
+metadata:
+  name: stock-migrate-scripts
+  namespace: stock-app

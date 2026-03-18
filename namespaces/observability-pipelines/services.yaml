@@ -1,0 +1,33 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: observability-pipelines-worker
+  name: observability-pipelines-worker
+  namespace: observability-pipelines
+spec:
+  clusterIP: 10.100.43.38
+  clusterIPs:
+  - 10.100.43.38
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: datadog-agent
+    port: 8282
+    protocol: TCP
+    targetPort: datadog-agent
+  - name: prom-metrics
+    port: 9090
+    protocol: TCP
+    targetPort: prom-metrics
+  - name: vector-api
+    port: 8686
+    protocol: TCP
+    targetPort: vector-api
+  selector:
+    app.kubernetes.io/name: observability-pipelines-worker
+  sessionAffinity: None
+  type: ClusterIP

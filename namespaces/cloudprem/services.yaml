@@ -1,0 +1,331 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-control-plane
+  namespace: cloudprem
+spec:
+  clusterIP: 10.100.211.99
+  clusterIPs:
+  - 10.100.211.99
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: rest
+    port: 7280
+    protocol: TCP
+    targetPort: rest
+  - name: grpc
+    port: 7281
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-external
+  namespace: cloudprem
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.100.246.176
+  clusterIPs:
+  - 10.100.246.176
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  loadBalancerSourceRanges:
+  - 87.71.217.38/32
+  - 3.233.144.0/20
+  ports:
+  - nodePort: 31478
+    port: 7280
+    protocol: TCP
+    targetPort: 7280
+  selector:
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: LoadBalancer
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-headless
+  namespace: cloudprem
+spec:
+  clusterIP: None
+  clusterIPs:
+  - None
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: tcp-http
+    port: 7280
+    protocol: TCP
+    targetPort: 7280
+  - name: tcp-grpc
+    port: 7281
+    protocol: TCP
+    targetPort: 7281
+  - name: udp
+    port: 7282
+    protocol: UDP
+    targetPort: 7282
+  - name: tcp-cloudprem
+    port: 7283
+    protocol: TCP
+    targetPort: 7283
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-indexer
+  namespace: cloudprem
+spec:
+  clusterIP: 10.100.167.19
+  clusterIPs:
+  - 10.100.167.19
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: rest
+    port: 7280
+    protocol: TCP
+    targetPort: rest
+  - name: grpc
+    port: 7281
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/component: indexer
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-janitor
+  namespace: cloudprem
+spec:
+  clusterIP: 10.100.117.12
+  clusterIPs:
+  - 10.100.117.12
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: rest
+    port: 7280
+    protocol: TCP
+    targetPort: rest
+  - name: grpc
+    port: 7281
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/component: janitor
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-metastore
+  namespace: cloudprem
+spec:
+  clusterIP: 10.100.27.111
+  clusterIPs:
+  - 10.100.27.111
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: rest
+    port: 7280
+    protocol: TCP
+    targetPort: rest
+  - name: grpc
+    port: 7281
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/component: metastore
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: primary
+    app.kubernetes.io/instance: cloudprem-postgres
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 18.3.0
+    helm.sh/chart: postgresql-18.5.6
+  name: cloudprem-postgres-postgresql
+  namespace: cloudprem
+spec:
+  clusterIP: 10.100.10.115
+  clusterIPs:
+  - 10.100.10.115
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: tcp-postgresql
+    port: 5432
+    protocol: TCP
+    targetPort: tcp-postgresql
+  selector:
+    app.kubernetes.io/component: primary
+    app.kubernetes.io/instance: cloudprem-postgres
+    app.kubernetes.io/name: postgresql
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: primary
+    app.kubernetes.io/instance: cloudprem-postgres
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 18.3.0
+    helm.sh/chart: postgresql-18.5.6
+  name: cloudprem-postgres-postgresql-hl
+  namespace: cloudprem
+spec:
+  clusterIP: None
+  clusterIPs:
+  - None
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: tcp-postgresql
+    port: 5432
+    protocol: TCP
+    targetPort: tcp-postgresql
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/component: primary
+    app.kubernetes.io/instance: cloudprem-postgres
+    app.kubernetes.io/name: postgresql
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-searcher
+  namespace: cloudprem
+spec:
+  clusterIP: 10.100.62.24
+  clusterIPs:
+  - 10.100.62.24
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: rest
+    port: 7280
+    protocol: TCP
+    targetPort: rest
+  - name: grpc
+    port: 7281
+    protocol: TCP
+    targetPort: grpc
+  - name: cloudprem
+    port: 7283
+    protocol: TCP
+    targetPort: cloudprem
+  selector:
+    app.kubernetes.io/component: searcher
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/name: cloudprem
+  sessionAffinity: None
+  type: ClusterIP

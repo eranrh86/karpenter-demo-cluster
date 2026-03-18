@@ -1,0 +1,92 @@
+---
+apiVersion: v1
+data:
+  node.yaml: "cloudprem:
+  mtls_header: X-Amzn-Mtls-Clientcert
+cloudprem_listen_port:\
+    \ 7283
+data_dir: /quickwit/qwdata
+default_index_root_uri: s3://eran-cloudprem-karpenter/indexes
+\
+    gossip_listen_port: 7282
+grpc:
+  keep_alive:
+    interval: 30s
+    timeout:\
+    \ 10s
+indexer:
+  split_store_max_num_bytes: 200G
+  split_store_max_num_splits:\
+    \ 10000
+ingest_api:
+  max_queue_disk_usage: 2.4GiB
+  max_queue_memory_usage:\
+    \ 1.2GiB
+listen_address: 0.0.0.0
+searcher:
+  aggregation_memory_limit: 500M
+\
+    \  fast_field_cache_capacity: 1.625G
+  max_num_concurrent_split_searches: 13
+\
+    \  partial_request_cache_capacity: 62.5M
+  split_footer_cache_capacity: 125M
+\
+    version: 0.8"
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem
+  namespace: cloudprem
+
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: cloudprem

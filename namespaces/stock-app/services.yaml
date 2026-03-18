@@ -1,0 +1,73 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-backend-svc
+  namespace: stock-app
+spec:
+  clusterIP: 10.100.162.45
+  clusterIPs:
+  - 10.100.162.45
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: stock-backend
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-frontend-svc
+  namespace: stock-app
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.100.154.34
+  clusterIPs:
+  - 10.100.154.34
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  loadBalancerSourceRanges:
+  - 87.71.217.38/32
+  ports:
+  - nodePort: 31910
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: stock-frontend
+  sessionAffinity: None
+  type: LoadBalancer
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-postgres
+  namespace: stock-app
+spec:
+  clusterIP: None
+  clusterIPs:
+  - None
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - port: 5432
+    protocol: TCP
+    targetPort: 5432
+  selector:
+    app: stock-postgres
+  sessionAffinity: None
+  type: ClusterIP

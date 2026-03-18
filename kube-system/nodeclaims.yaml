@@ -1,0 +1,1274 @@
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '8'
+    karpenter.k8s.aws/instance-cpu-manufacturer: amd
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2200'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2780'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3a
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '32768'
+    karpenter.k8s.aws/instance-network-bandwidth: '2048'
+    karpenter.k8s.aws/instance-size: 2xlarge
+    karpenter.sh/capacity-type: on-demand
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3a.2xlarge
+    topology.k8s.aws/zone-id: use1-az1
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1a
+  name: default-4hfx5
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - t3.2xlarge
+    - t3a.2xlarge
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: karpenter.k8s.aws/instance-family
+    operator: In
+    values:
+    - t3
+    - t3a
+    - t4g
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  resources:
+    requests:
+      cpu: 6642m
+      ephemeral-storage: 3Gi
+      memory: 13228Mi
+      pods: '15'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '4'
+    karpenter.k8s.aws/instance-cpu-manufacturer: amd
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2200'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2780'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3a
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '16384'
+    karpenter.k8s.aws/instance-network-bandwidth: '1024'
+    karpenter.k8s.aws/instance-size: xlarge
+    karpenter.sh/capacity-type: on-demand
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3a.xlarge
+    topology.k8s.aws/zone-id: use1-az1
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1a
+  name: default-5zhlr
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - t3.2xlarge
+    - t3.xlarge
+    - t3a.2xlarge
+    - t3a.xlarge
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+  - key: karpenter.k8s.aws/instance-family
+    operator: In
+    values:
+    - t3
+    - t3a
+    - t4g
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  resources:
+    requests:
+      cpu: 2642m
+      ephemeral-storage: 3Gi
+      memory: 5036Mi
+      pods: '13'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: c
+    karpenter.k8s.aws/instance-cpu: '2'
+    karpenter.k8s.aws/instance-cpu-manufacturer: amd
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '3600'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '10000'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'true'
+    karpenter.k8s.aws/instance-family: c6a
+    karpenter.k8s.aws/instance-generation: '6'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '4096'
+    karpenter.k8s.aws/instance-network-bandwidth: '781'
+    karpenter.k8s.aws/instance-size: large
+    karpenter.sh/capacity-type: spot
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: c6a.large
+    topology.k8s.aws/zone-id: use1-az4
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1c
+  name: default-74lgg
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+    - spot
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - c3.2xlarge
+    - c3.large
+    - c3.xlarge
+    - c4.2xlarge
+    - c4.large
+    - c4.xlarge
+    - c5.2xlarge
+    - c5.large
+    - c5.xlarge
+    - c5a.2xlarge
+    - c5a.large
+    - c5a.xlarge
+    - c5ad.2xlarge
+    - c5ad.large
+    - c5ad.xlarge
+    - c5d.2xlarge
+    - c5d.large
+    - c5d.xlarge
+    - c5n.2xlarge
+    - c5n.large
+    - c5n.xlarge
+    - c6a.2xlarge
+    - c6a.large
+    - c6a.xlarge
+    - c6i.2xlarge
+    - c6i.large
+    - c6i.xlarge
+    - c6id.2xlarge
+    - c6id.large
+    - c6id.xlarge
+    - c6in.2xlarge
+    - c6in.large
+    - c6in.xlarge
+    - c7a.2xlarge
+    - c7a.large
+    - c7a.xlarge
+    - c7i-flex.2xlarge
+    - c7i-flex.large
+    - c7i-flex.xlarge
+    - c7i.2xlarge
+    - c7i.large
+    - c7i.xlarge
+    - c8a.2xlarge
+    - c8a.large
+    - c8a.xlarge
+    - c8i-flex.2xlarge
+    - c8i-flex.large
+    - c8i-flex.xlarge
+    - c8i.2xlarge
+    - c8i.large
+    - c8i.xlarge
+    - c8id.2xlarge
+    - c8id.large
+    - c8id.xlarge
+    - m3.2xlarge
+    - m3.large
+    - m3.xlarge
+    - m4.2xlarge
+    - m4.large
+    - m4.xlarge
+    - m5.2xlarge
+    - m5.large
+    - m5.xlarge
+    - m5a.2xlarge
+    - m5a.large
+    - m5a.xlarge
+    - m5ad.2xlarge
+    - m5ad.large
+    - m5ad.xlarge
+    - m5d.2xlarge
+    - m5d.large
+    - m5d.xlarge
+    - m5dn.2xlarge
+    - m5dn.large
+    - m5dn.xlarge
+    - m5n.2xlarge
+    - m5n.large
+    - m5n.xlarge
+    - m5zn.2xlarge
+    - m5zn.large
+    - m5zn.xlarge
+    - m6a.2xlarge
+    - m6a.large
+    - m6a.xlarge
+    - m6i.2xlarge
+    - m6i.large
+    - m6i.xlarge
+    - m6id.2xlarge
+    - m6id.large
+    - m6id.xlarge
+    - m6idn.2xlarge
+    - m6idn.large
+    - m6idn.xlarge
+    - m6in.2xlarge
+    - m6in.large
+    - m6in.xlarge
+    - m7a.2xlarge
+    - m7a.large
+    - m7a.xlarge
+    - m7i-flex.2xlarge
+    - m7i-flex.large
+    - m7i-flex.xlarge
+    - m7i.2xlarge
+    - m7i.large
+    - m7i.xlarge
+    - m8a.2xlarge
+    - m8a.large
+    - m8a.xlarge
+    - m8azn.large
+    - m8azn.xlarge
+    - m8i-flex.2xlarge
+    - m8i-flex.large
+    - m8i-flex.xlarge
+    - m8i.2xlarge
+    - m8i.large
+    - m8i.xlarge
+    - m8id.2xlarge
+    - m8id.large
+    - m8id.xlarge
+    - r3.2xlarge
+    - r3.large
+    - r3.xlarge
+    - r4.2xlarge
+    - r4.large
+    - r4.xlarge
+    - r5.2xlarge
+    - r5.large
+    - r5.xlarge
+    - r5a.2xlarge
+    - r5a.large
+    - r5a.xlarge
+    - r5ad.2xlarge
+    - r5ad.large
+    - r5ad.xlarge
+    - r5b.2xlarge
+    - r5b.large
+    - r5b.xlarge
+    - r5d.2xlarge
+    - r5d.large
+    - r5d.xlarge
+    - r5dn.2xlarge
+    - r5dn.large
+    - r5dn.xlarge
+    - r5n.2xlarge
+    - r5n.large
+    - r5n.xlarge
+    - r6a.2xlarge
+    - r6a.large
+    - r6a.xlarge
+    - r6i.2xlarge
+    - r6i.large
+    - r6i.xlarge
+    - r6id.2xlarge
+    - r6id.large
+    - r6id.xlarge
+    - r6idn.2xlarge
+    - r6idn.large
+    - r6idn.xlarge
+    - r6in.2xlarge
+    - r6in.large
+    - r6in.xlarge
+    - r7a.2xlarge
+    - r7a.large
+    - r7a.xlarge
+    - r7i.2xlarge
+    - r7i.large
+    - r7i.xlarge
+    - r7iz.2xlarge
+    - r7iz.large
+    - r7iz.xlarge
+    - r8a.2xlarge
+    - r8a.large
+    - r8a.xlarge
+    - r8i-flex.2xlarge
+    - r8i-flex.large
+    - r8i-flex.xlarge
+    - r8i.2xlarge
+    - r8i.large
+    - r8i.xlarge
+    - r8id.2xlarge
+    - r8id.large
+    - r8id.xlarge
+    - t3.2xlarge
+    - t3.large
+    - t3.medium
+    - t3.xlarge
+    - t3a.2xlarge
+    - t3a.large
+    - t3a.medium
+    - t3a.xlarge
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  resources:
+    requests:
+      cpu: 842m
+      ephemeral-storage: 3Gi
+      memory: 1196Mi
+      pods: '13'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '8'
+    karpenter.k8s.aws/instance-cpu-manufacturer: intel
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2500'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2780'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '32768'
+    karpenter.k8s.aws/instance-network-bandwidth: '2048'
+    karpenter.k8s.aws/instance-size: 2xlarge
+    karpenter.sh/capacity-type: spot
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3.2xlarge
+    topology.k8s.aws/zone-id: use1-az4
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1c
+  name: default-hz722
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - c5.2xlarge
+    - c5a.2xlarge
+    - c5ad.2xlarge
+    - c5d.2xlarge
+    - c5n.2xlarge
+    - c6a.2xlarge
+    - c6i.2xlarge
+    - c6id.2xlarge
+    - c6in.2xlarge
+    - c7a.2xlarge
+    - c7i-flex.2xlarge
+    - c7i.2xlarge
+    - c8i-flex.2xlarge
+    - c8i.2xlarge
+    - c8id.2xlarge
+    - m3.2xlarge
+    - m4.2xlarge
+    - m5.2xlarge
+    - m5a.2xlarge
+    - m5ad.2xlarge
+    - m5d.2xlarge
+    - m5dn.2xlarge
+    - m5n.2xlarge
+    - m5zn.2xlarge
+    - m6a.2xlarge
+    - m6i.2xlarge
+    - m6id.2xlarge
+    - m6idn.2xlarge
+    - m6in.2xlarge
+    - m7a.2xlarge
+    - m7i-flex.2xlarge
+    - m7i.2xlarge
+    - m8a.2xlarge
+    - m8i-flex.2xlarge
+    - m8i.2xlarge
+    - m8id.2xlarge
+    - r3.2xlarge
+    - r4.2xlarge
+    - r5.2xlarge
+    - r5a.2xlarge
+    - r5ad.2xlarge
+    - r5b.2xlarge
+    - r5d.2xlarge
+    - r5dn.2xlarge
+    - r5n.2xlarge
+    - r6a.2xlarge
+    - r6i.2xlarge
+    - r6id.2xlarge
+    - r6idn.2xlarge
+    - r6in.2xlarge
+    - r7a.2xlarge
+    - r7i.2xlarge
+    - r7iz.2xlarge
+    - r8a.2xlarge
+    - r8i-flex.2xlarge
+    - r8i.2xlarge
+    - r8id.2xlarge
+    - t3.2xlarge
+    - t3a.2xlarge
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+    - spot
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  resources:
+    requests:
+      cpu: 6642m
+      ephemeral-storage: 3Gi
+      memory: 13228Mi
+      pods: '15'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '2'
+    karpenter.k8s.aws/instance-cpu-manufacturer: intel
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2500'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2780'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '8192'
+    karpenter.k8s.aws/instance-network-bandwidth: '512'
+    karpenter.k8s.aws/instance-size: large
+    karpenter.sh/capacity-type: spot
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3.large
+    topology.k8s.aws/zone-id: use1-az4
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1c
+  name: default-mkkql
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+    - spot
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - c3.2xlarge
+    - c3.large
+    - c3.xlarge
+    - c4.2xlarge
+    - c4.large
+    - c4.xlarge
+    - c5.2xlarge
+    - c5.large
+    - c5.xlarge
+    - c5a.2xlarge
+    - c5a.large
+    - c5a.xlarge
+    - c5ad.2xlarge
+    - c5ad.large
+    - c5ad.xlarge
+    - c5d.2xlarge
+    - c5d.large
+    - c5d.xlarge
+    - c5n.2xlarge
+    - c5n.large
+    - c5n.xlarge
+    - c6a.2xlarge
+    - c6a.large
+    - c6a.xlarge
+    - c6i.2xlarge
+    - c6i.large
+    - c6i.xlarge
+    - c6id.2xlarge
+    - c6id.large
+    - c6id.xlarge
+    - c6in.2xlarge
+    - c6in.large
+    - c6in.xlarge
+    - c7a.2xlarge
+    - c7a.large
+    - c7a.xlarge
+    - c7i-flex.2xlarge
+    - c7i-flex.large
+    - c7i-flex.xlarge
+    - c7i.2xlarge
+    - c7i.large
+    - c7i.xlarge
+    - c8a.2xlarge
+    - c8a.large
+    - c8a.xlarge
+    - c8i-flex.2xlarge
+    - c8i-flex.large
+    - c8i-flex.xlarge
+    - c8i.2xlarge
+    - c8i.large
+    - c8i.xlarge
+    - c8id.2xlarge
+    - c8id.large
+    - c8id.xlarge
+    - m3.2xlarge
+    - m3.large
+    - m3.xlarge
+    - m4.2xlarge
+    - m4.large
+    - m4.xlarge
+    - m5.2xlarge
+    - m5.large
+    - m5.xlarge
+    - m5a.2xlarge
+    - m5a.large
+    - m5a.xlarge
+    - m5ad.2xlarge
+    - m5ad.large
+    - m5ad.xlarge
+    - m5d.2xlarge
+    - m5d.large
+    - m5d.xlarge
+    - m5dn.2xlarge
+    - m5dn.large
+    - m5dn.xlarge
+    - m5n.2xlarge
+    - m5n.large
+    - m5n.xlarge
+    - m5zn.2xlarge
+    - m5zn.large
+    - m5zn.xlarge
+    - m6a.2xlarge
+    - m6a.large
+    - m6a.xlarge
+    - m6i.2xlarge
+    - m6i.large
+    - m6i.xlarge
+    - m6id.2xlarge
+    - m6id.large
+    - m6id.xlarge
+    - m6idn.2xlarge
+    - m6idn.large
+    - m6idn.xlarge
+    - m6in.2xlarge
+    - m6in.large
+    - m6in.xlarge
+    - m7a.2xlarge
+    - m7a.large
+    - m7a.xlarge
+    - m7i-flex.2xlarge
+    - m7i-flex.large
+    - m7i-flex.xlarge
+    - m7i.2xlarge
+    - m7i.large
+    - m7i.xlarge
+    - m8a.2xlarge
+    - m8a.large
+    - m8a.xlarge
+    - m8azn.large
+    - m8azn.xlarge
+    - m8i-flex.2xlarge
+    - m8i-flex.large
+    - m8i-flex.xlarge
+    - m8i.2xlarge
+    - m8i.large
+    - m8i.xlarge
+    - m8id.2xlarge
+    - m8id.large
+    - m8id.xlarge
+    - r3.2xlarge
+    - r3.large
+    - r3.xlarge
+    - r4.2xlarge
+    - r4.large
+    - r4.xlarge
+    - r5.2xlarge
+    - r5.large
+    - r5.xlarge
+    - r5a.2xlarge
+    - r5a.large
+    - r5a.xlarge
+    - r5ad.2xlarge
+    - r5ad.large
+    - r5ad.xlarge
+    - r5b.2xlarge
+    - r5b.large
+    - r5b.xlarge
+    - r5d.2xlarge
+    - r5d.large
+    - r5d.xlarge
+    - r5dn.2xlarge
+    - r5dn.large
+    - r5dn.xlarge
+    - r5n.2xlarge
+    - r5n.large
+    - r5n.xlarge
+    - r6a.2xlarge
+    - r6a.large
+    - r6a.xlarge
+    - r6i.2xlarge
+    - r6i.large
+    - r6i.xlarge
+    - r6id.2xlarge
+    - r6id.large
+    - r6id.xlarge
+    - r6idn.2xlarge
+    - r6idn.large
+    - r6idn.xlarge
+    - r6in.2xlarge
+    - r6in.large
+    - r6in.xlarge
+    - r7a.2xlarge
+    - r7a.large
+    - r7a.xlarge
+    - r7i.2xlarge
+    - r7i.large
+    - r7i.xlarge
+    - r7iz.2xlarge
+    - r7iz.large
+    - r7iz.xlarge
+    - r8a.2xlarge
+    - r8a.large
+    - r8a.xlarge
+    - r8i-flex.2xlarge
+    - r8i-flex.large
+    - r8i-flex.xlarge
+    - r8i.2xlarge
+    - r8i.large
+    - r8i.xlarge
+    - r8id.2xlarge
+    - r8id.large
+    - r8id.xlarge
+    - t3.2xlarge
+    - t3.large
+    - t3.medium
+    - t3.xlarge
+    - t3a.2xlarge
+    - t3a.large
+    - t3a.medium
+    - t3a.xlarge
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  resources:
+    requests:
+      cpu: 1041m
+      ephemeral-storage: 3Gi
+      memory: 1196Mi
+      pods: '13'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '2'
+    karpenter.k8s.aws/instance-cpu-manufacturer: amd
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2200'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2085'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3a
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '4096'
+    karpenter.k8s.aws/instance-network-bandwidth: '256'
+    karpenter.k8s.aws/instance-size: medium
+    karpenter.sh/capacity-type: on-demand
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3a.medium
+    topology.k8s.aws/zone-id: use1-az4
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1c
+  name: default-twcd5
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+  - key: karpenter.k8s.aws/instance-family
+    operator: In
+    values:
+    - t3
+    - t3a
+    - t4g
+  - key: topology.kubernetes.io/zone
+    operator: In
+    values:
+    - us-east-1c
+  - key: topology.kubernetes.io/region
+    operator: In
+    values:
+    - us-east-1
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - t3.2xlarge
+    - t3.large
+    - t3.medium
+    - t3.xlarge
+    - t3a.2xlarge
+    - t3a.large
+    - t3a.medium
+    - t3a.xlarge
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  resources:
+    requests:
+      cpu: 742m
+      ephemeral-storage: 3122Mi
+      memory: 1068Mi
+      pods: '13'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '2'
+    karpenter.k8s.aws/instance-cpu-manufacturer: amd
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2200'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2780'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3a
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '8192'
+    karpenter.k8s.aws/instance-network-bandwidth: '512'
+    karpenter.k8s.aws/instance-size: large
+    karpenter.sh/capacity-type: on-demand
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3a.large
+    topology.k8s.aws/zone-id: use1-az1
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1a
+  name: default-vzqln
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - t3.2xlarge
+    - t3.large
+    - t3.xlarge
+    - t3a.2xlarge
+    - t3a.large
+    - t3a.xlarge
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: karpenter.k8s.aws/instance-family
+    operator: In
+    values:
+    - t3
+    - t3a
+    - t4g
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  resources:
+    requests:
+      cpu: 1642m
+      ephemeral-storage: 3Gi
+      memory: 5036Mi
+      pods: '13'
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodeClaim
+metadata:
+  generateName: default-
+  labels:
+    karpenter.k8s.aws/ec2nodeclass: default
+    karpenter.k8s.aws/instance-capability-flex: 'false'
+    karpenter.k8s.aws/instance-category: t
+    karpenter.k8s.aws/instance-cpu: '8'
+    karpenter.k8s.aws/instance-cpu-manufacturer: intel
+    karpenter.k8s.aws/instance-cpu-sustained-clock-speed-mhz: '2500'
+    karpenter.k8s.aws/instance-ebs-bandwidth: '2780'
+    karpenter.k8s.aws/instance-encryption-in-transit-supported: 'false'
+    karpenter.k8s.aws/instance-family: t3
+    karpenter.k8s.aws/instance-generation: '3'
+    karpenter.k8s.aws/instance-hypervisor: nitro
+    karpenter.k8s.aws/instance-memory: '32768'
+    karpenter.k8s.aws/instance-network-bandwidth: '2048'
+    karpenter.k8s.aws/instance-size: 2xlarge
+    karpenter.sh/capacity-type: spot
+    karpenter.sh/nodepool: default
+    kubernetes.io/arch: amd64
+    kubernetes.io/os: linux
+    node.kubernetes.io/instance-type: t3.2xlarge
+    topology.k8s.aws/zone-id: use1-az4
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1c
+  name: default-w2qtd
+  ownerReferences:
+  - apiVersion: karpenter.sh/v1
+    blockOwnerDeletion: true
+    kind: NodePool
+    name: default
+    uid: cca1519c-1a94-4cac-944e-de14aa6e580c
+spec:
+  expireAfter: 720h
+  nodeClassRef:
+    group: karpenter.k8s.aws
+    kind: EC2NodeClass
+    name: default
+  requirements:
+  - key: karpenter.sh/capacity-type
+    operator: In
+    values:
+    - on-demand
+    - spot
+  - key: karpenter.k8s.aws/instance-generation
+    operator: Gt
+    values:
+    - '2'
+  - key: karpenter.sh/nodepool
+    operator: In
+    values:
+    - default
+  - key: karpenter.k8s.aws/ec2nodeclass
+    operator: In
+    values:
+    - default
+  - key: kubernetes.io/arch
+    operator: In
+    values:
+    - amd64
+  - key: karpenter.k8s.aws/instance-size
+    operator: In
+    values:
+    - 2xlarge
+    - large
+    - medium
+    - xlarge
+  - key: node.kubernetes.io/instance-type
+    operator: In
+    values:
+    - c5.2xlarge
+    - c5a.2xlarge
+    - c5ad.2xlarge
+    - c5d.2xlarge
+    - c5n.2xlarge
+    - c6a.2xlarge
+    - c6i.2xlarge
+    - c6id.2xlarge
+    - c6in.2xlarge
+    - c7a.2xlarge
+    - c7i-flex.2xlarge
+    - c7i.2xlarge
+    - c8i-flex.2xlarge
+    - c8i.2xlarge
+    - c8id.2xlarge
+    - m3.2xlarge
+    - m4.2xlarge
+    - m5.2xlarge
+    - m5a.2xlarge
+    - m5ad.2xlarge
+    - m5d.2xlarge
+    - m5dn.2xlarge
+    - m5n.2xlarge
+    - m5zn.2xlarge
+    - m6a.2xlarge
+    - m6i.2xlarge
+    - m6id.2xlarge
+    - m6idn.2xlarge
+    - m6in.2xlarge
+    - m7a.2xlarge
+    - m7i-flex.2xlarge
+    - m7i.2xlarge
+    - m8a.2xlarge
+    - m8i-flex.2xlarge
+    - m8i.2xlarge
+    - m8id.2xlarge
+    - r3.2xlarge
+    - r4.2xlarge
+    - r5.2xlarge
+    - r5a.2xlarge
+    - r5ad.2xlarge
+    - r5b.2xlarge
+    - r5d.2xlarge
+    - r5dn.2xlarge
+    - r5n.2xlarge
+    - r6a.2xlarge
+    - r6i.2xlarge
+    - r6id.2xlarge
+    - r6idn.2xlarge
+    - r6in.2xlarge
+    - r7a.2xlarge
+    - r7i.2xlarge
+    - r7iz.2xlarge
+    - r8a.2xlarge
+    - r8i-flex.2xlarge
+    - r8i.2xlarge
+    - r8id.2xlarge
+    - t3.2xlarge
+    - t3a.2xlarge
+  - key: karpenter.k8s.aws/instance-category
+    operator: In
+    values:
+    - c
+    - m
+    - r
+    - t
+  - key: kubernetes.io/os
+    operator: In
+    values:
+    - linux
+  resources:
+    requests:
+      cpu: 4642m
+      ephemeral-storage: 3Gi
+      memory: 13228Mi
+      pods: '15'
+

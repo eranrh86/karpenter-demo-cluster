@@ -1,0 +1,632 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-control-plane
+  namespace: cloudprem
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane
+      app.kubernetes.io/instance: cloudprem
+      app.kubernetes.io/name: cloudprem
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/instance: cloudprem
+        app.kubernetes.io/name: cloudprem
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values:
+                - on-demand
+              - key: karpenter.k8s.aws/instance-family
+                operator: In
+                values:
+                - t3
+                - t3a
+                - t4g
+      containers:
+      - args:
+        - run
+        - --service
+        - control_plane
+        env:
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: KUBERNETES_COMPONENT
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels['app.kubernetes.io/component']
+        - name: KUBERNETES_POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: KUBERNETES_POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: KUBERNETES_LIMITS_CPU
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: limits.cpu
+        - name: KUBERNETES_LIMITS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: limits.memory
+        - name: KUBERNETES_REQUESTS_CPU
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: requests.cpu
+        - name: KUBERNETES_REQUESTS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: requests.memory
+        - name: QW_CONFIG
+          value: /quickwit/node.yaml
+        - name: QW_CLUSTER_ID
+          value: cloudprem-cloudprem
+        - name: QW_NODE_ID
+          value: $(KUBERNETES_POD_NAME)
+        - name: QW_PEER_SEEDS
+          value: cloudprem-headless
+        - name: QW_ADVERTISE_ADDRESS
+          value: $(KUBERNETES_POD_IP)
+        - name: QW_CLUSTER_ENDPOINT
+          value: http://cloudprem-metastore.cloudprem.svc.cluster.local:7280
+        - name: CP_DOGSTATSD_SERVER_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: CP_DOGSTATSD_SERVER_PORT
+          value: '8125'
+        - name: CP_ENABLE_REVERSE_CONNECTION
+          value: 'true'
+        - name: CP_MIN_SHARDS
+          value: '12'
+        - name: CP_RETENTION_PERIOD
+          value: 30d
+        - name: DD_SITE
+          value: datadoghq.com
+        - name: DD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: api-key
+              name: datadog-secret
+        - name: AWS_REGION
+          value: us-east-1
+        image: public.ecr.aws/datadog/cloudprem:v0.1.22
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/livez
+            port: rest
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: cloudprem
+        ports:
+        - containerPort: 7280
+          name: rest
+          protocol: TCP
+        - containerPort: 7281
+          name: grpc
+          protocol: TCP
+        - containerPort: 7282
+          name: discovery
+          protocol: UDP
+        - containerPort: 7283
+          name: cloudprem
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/readyz
+            port: rest
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '2'
+            memory: 4Gi
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1005
+        startupProbe:
+          failureThreshold: 12
+          httpGet:
+            path: /health/livez
+            port: rest
+            scheme: HTTP
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /quickwit/node.yaml
+          name: config
+          subPath: node.yaml
+        - mountPath: /quickwit/qwdata
+          name: data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 1005
+      serviceAccount: cloudprem
+      serviceAccountName: cloudprem
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          items:
+          - key: node.yaml
+            path: node.yaml
+          name: cloudprem
+        name: config
+      - emptyDir: {}
+        name: data
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-janitor
+  namespace: cloudprem
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: janitor
+      app.kubernetes.io/instance: cloudprem
+      app.kubernetes.io/name: cloudprem
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: janitor
+        app.kubernetes.io/instance: cloudprem
+        app.kubernetes.io/name: cloudprem
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values:
+                - on-demand
+              - key: karpenter.k8s.aws/instance-family
+                operator: In
+                values:
+                - t3
+                - t3a
+                - t4g
+      containers:
+      - args:
+        - run
+        - --service
+        - janitor
+        env:
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: KUBERNETES_COMPONENT
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels['app.kubernetes.io/component']
+        - name: KUBERNETES_POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: KUBERNETES_POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: KUBERNETES_LIMITS_CPU
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: limits.cpu
+        - name: KUBERNETES_LIMITS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: limits.memory
+        - name: KUBERNETES_REQUESTS_CPU
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: requests.cpu
+        - name: KUBERNETES_REQUESTS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: requests.memory
+        - name: QW_CONFIG
+          value: /quickwit/node.yaml
+        - name: QW_CLUSTER_ID
+          value: cloudprem-cloudprem
+        - name: QW_NODE_ID
+          value: $(KUBERNETES_POD_NAME)
+        - name: QW_PEER_SEEDS
+          value: cloudprem-headless
+        - name: QW_ADVERTISE_ADDRESS
+          value: $(KUBERNETES_POD_IP)
+        - name: QW_CLUSTER_ENDPOINT
+          value: http://cloudprem-metastore.cloudprem.svc.cluster.local:7280
+        - name: CP_DOGSTATSD_SERVER_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: CP_DOGSTATSD_SERVER_PORT
+          value: '8125'
+        - name: CP_ENABLE_REVERSE_CONNECTION
+          value: 'true'
+        - name: CP_MIN_SHARDS
+          value: '12'
+        - name: CP_RETENTION_PERIOD
+          value: 30d
+        - name: DD_SITE
+          value: datadoghq.com
+        - name: DD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: api-key
+              name: datadog-secret
+        - name: AWS_REGION
+          value: us-east-1
+        image: public.ecr.aws/datadog/cloudprem:v0.1.22
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/livez
+            port: rest
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: cloudprem
+        ports:
+        - containerPort: 7280
+          name: rest
+          protocol: TCP
+        - containerPort: 7281
+          name: grpc
+          protocol: TCP
+        - containerPort: 7282
+          name: discovery
+          protocol: UDP
+        - containerPort: 7283
+          name: cloudprem
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/readyz
+            port: rest
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '2'
+            memory: 4Gi
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1005
+        startupProbe:
+          failureThreshold: 12
+          httpGet:
+            path: /health/livez
+            port: rest
+            scheme: HTTP
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /quickwit/node.yaml
+          name: config
+          subPath: node.yaml
+        - mountPath: /quickwit/qwdata
+          name: data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 1005
+      serviceAccount: cloudprem
+      serviceAccountName: cloudprem
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          items:
+          - key: node.yaml
+            path: node.yaml
+          name: cloudprem
+        name: config
+      - emptyDir: {}
+        name: data
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: cloudprem
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: cloudprem
+    app.kubernetes.io/version: v0.1.22
+    helm.sh/chart: cloudprem-0.2.2
+  name: cloudprem-metastore
+  namespace: cloudprem
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: metastore
+      app.kubernetes.io/instance: cloudprem
+      app.kubernetes.io/name: cloudprem
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: metastore
+        app.kubernetes.io/instance: cloudprem
+        app.kubernetes.io/name: cloudprem
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values:
+                - on-demand
+              - key: karpenter.k8s.aws/instance-family
+                operator: In
+                values:
+                - t3
+                - t3a
+                - t4g
+      containers:
+      - args:
+        - run
+        - --service
+        - metastore
+        env:
+        - name: KUBERNETES_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: KUBERNETES_COMPONENT
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels['app.kubernetes.io/component']
+        - name: KUBERNETES_POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: KUBERNETES_POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: KUBERNETES_LIMITS_CPU
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: limits.cpu
+        - name: KUBERNETES_LIMITS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: limits.memory
+        - name: KUBERNETES_REQUESTS_CPU
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: requests.cpu
+        - name: KUBERNETES_REQUESTS_MEMORY
+          valueFrom:
+            resourceFieldRef:
+              containerName: cloudprem
+              divisor: '0'
+              resource: requests.memory
+        - name: QW_CONFIG
+          value: /quickwit/node.yaml
+        - name: QW_CLUSTER_ID
+          value: cloudprem-cloudprem
+        - name: QW_NODE_ID
+          value: $(KUBERNETES_POD_NAME)
+        - name: QW_PEER_SEEDS
+          value: cloudprem-headless
+        - name: QW_ADVERTISE_ADDRESS
+          value: $(KUBERNETES_POD_IP)
+        - name: QW_CLUSTER_ENDPOINT
+          value: http://cloudprem-metastore.cloudprem.svc.cluster.local:7280
+        - name: CP_DOGSTATSD_SERVER_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: CP_DOGSTATSD_SERVER_PORT
+          value: '8125'
+        - name: CP_ENABLE_REVERSE_CONNECTION
+          value: 'true'
+        - name: CP_MIN_SHARDS
+          value: '12'
+        - name: CP_RETENTION_PERIOD
+          value: 30d
+        - name: DD_SITE
+          value: datadoghq.com
+        - name: DD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: api-key
+              name: datadog-secret
+        - name: AWS_REGION
+          value: us-east-1
+        envFrom:
+        - secretRef:
+            name: cloudprem-metastore-uri
+        image: public.ecr.aws/datadog/cloudprem:v0.1.22
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/livez
+            port: rest
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: cloudprem
+        ports:
+        - containerPort: 7280
+          name: rest
+          protocol: TCP
+        - containerPort: 7281
+          name: grpc
+          protocol: TCP
+        - containerPort: 7282
+          name: discovery
+          protocol: UDP
+        - containerPort: 7283
+          name: cloudprem
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/readyz
+            port: rest
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '2'
+            memory: 4Gi
+          requests:
+            cpu: '2'
+            memory: 4Gi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1005
+        startupProbe:
+          failureThreshold: 12
+          httpGet:
+            path: /health/livez
+            port: rest
+            scheme: HTTP
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 1
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /quickwit/node.yaml
+          name: config
+          subPath: node.yaml
+        - mountPath: /quickwit/qwdata
+          name: data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 1005
+      serviceAccount: cloudprem
+      serviceAccountName: cloudprem
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          items:
+          - key: node.yaml
+            path: node.yaml
+          name: cloudprem
+        name: config
+      - emptyDir: {}
+        name: data

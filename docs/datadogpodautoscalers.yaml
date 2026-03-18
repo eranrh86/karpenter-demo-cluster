@@ -1,0 +1,212 @@
+---
+apiVersion: datadoghq.com/v1alpha2
+kind: DatadogPodAutoscaler
+metadata:
+  name: eran-backend-autoscaler-c3c81a61
+  namespace: default
+spec:
+  applyPolicy:
+    mode: Apply
+    scaleDown:
+      strategy: Disabled
+    scaleUp:
+      strategy: Disabled
+    update:
+      strategy: Auto
+  constraints:
+    containers:
+    - enabled: true
+      name: '*'
+    maxReplicas: 100
+    minReplicas: 2
+  fallback:
+    horizontal:
+      direction: ScaleUp
+      enabled: true
+      objectives:
+      - podResource:
+          name: cpu
+          value:
+            type: Utilization
+            utilization: 70
+        type: PodResource
+      triggers:
+        staleRecommendationThresholdSeconds: 600
+  owner: Remote
+  remoteVersion: 1000000004
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: eran-backend
+
+---
+apiVersion: datadoghq.com/v1alpha2
+kind: DatadogPodAutoscaler
+metadata:
+  name: eran-database-autoscaler-144b5a64
+  namespace: default
+spec:
+  applyPolicy:
+    mode: Apply
+    scaleDown:
+      rules:
+      - periodSeconds: 1200
+        type: Percent
+        value: 20
+      stabilizationWindowSeconds: 600
+      strategy: Max
+    scaleUp:
+      rules:
+      - periodSeconds: 120
+        type: Percent
+        value: 50
+      stabilizationWindowSeconds: 600
+      strategy: Max
+    update:
+      strategy: Auto
+  constraints:
+    containers:
+    - enabled: true
+      name: '*'
+    maxReplicas: 100
+    minReplicas: 2
+  fallback:
+    horizontal:
+      direction: ScaleUp
+      enabled: true
+      objectives:
+      - podResource:
+          name: cpu
+          value:
+            type: Utilization
+            utilization: 70
+        type: PodResource
+      triggers:
+        staleRecommendationThresholdSeconds: 600
+  objectives:
+  - podResource:
+      name: cpu
+      value:
+        type: Utilization
+        utilization: 70
+    type: PodResource
+  owner: Remote
+  remoteVersion: 1000000004
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: eran-database
+
+---
+apiVersion: datadoghq.com/v1alpha2
+kind: DatadogPodAutoscaler
+metadata:
+  name: load-test-autoscaler
+  namespace: load-test
+spec:
+  applyPolicy:
+    mode: Apply
+  constraints:
+    containers:
+    - name: stress
+      requests:
+        maxAllowed:
+          cpu: 2000m
+          memory: 2Gi
+        minAllowed:
+          cpu: 100m
+          memory: 128Mi
+    maxReplicas: 10
+    minReplicas: 10
+  fallback:
+    horizontal:
+      direction: ScaleUp
+      enabled: true
+      triggers:
+        staleRecommendationThresholdSeconds: 600
+  owner: Local
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: load-test-workers
+
+---
+apiVersion: datadoghq.com/v1alpha2
+kind: DatadogPodAutoscaler
+metadata:
+  name: stock-backend-autoscaler
+  namespace: stock-app
+spec:
+  applyPolicy:
+    mode: Apply
+    scaleDown:
+      strategy: Max
+    scaleUp:
+      strategy: Max
+    update:
+      strategy: Auto
+  constraints:
+    containers:
+    - enabled: true
+      name: '*'
+      requests:
+        maxAllowed:
+          cpu: 500m
+          memory: 512Mi
+        minAllowed:
+          cpu: 10m
+          memory: 64Mi
+    maxReplicas: 1
+    minReplicas: 1
+  fallback:
+    horizontal:
+      direction: ScaleUp
+      enabled: true
+      triggers:
+        staleRecommendationThresholdSeconds: 600
+  owner: Local
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: stock-backend
+
+---
+apiVersion: datadoghq.com/v1alpha2
+kind: DatadogPodAutoscaler
+metadata:
+  name: stock-frontend-autoscaler
+  namespace: stock-app
+spec:
+  applyPolicy:
+    mode: Apply
+    scaleDown:
+      strategy: Max
+    scaleUp:
+      strategy: Max
+    update:
+      strategy: Auto
+  constraints:
+    containers:
+    - enabled: true
+      name: '*'
+      requests:
+        maxAllowed:
+          cpu: 500m
+          memory: 256Mi
+        minAllowed:
+          cpu: 10m
+          memory: 32Mi
+    maxReplicas: 5
+    minReplicas: 1
+  fallback:
+    horizontal:
+      direction: ScaleUp
+      enabled: true
+      triggers:
+        staleRecommendationThresholdSeconds: 600
+  owner: Local
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: stock-frontend
+

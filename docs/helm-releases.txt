@@ -1,0 +1,11 @@
+=== Helm releases ===
+NAME              	NAMESPACE  	REVISION	UPDATED                             	STATUS  	CHART                           	APP VERSION
+arc               	githubci   	1       	2026-03-07 19:50:40.285251 +0200 IST	deployed	actions-runner-controller-0.23.7	0.27.6     
+cloudprem         	cloudprem  	3       	2026-03-16 20:09:59.503703 +0200 IST	deployed	cloudprem-0.2.2                 	v0.1.22    
+cloudprem-postgres	cloudprem  	2       	2026-03-16 20:12:43.05003 +0200 IST 	deployed	postgresql-18.5.6               	18.3.0     
+datadog-operator  	default    	1       	2026-02-02 14:24:35.205098 +0200 IST	deployed	datadog-operator-2.17.0         	1.22.0     
+grafana           	monitoring 	1       	2026-02-17 13:03:09.546723 +0200 IST	deployed	grafana-10.5.15                 	12.3.1     
+karpenter         	kube-system	4       	2026-02-02 20:16:00.590167 +0200 IST	deployed	karpenter-1.8.6                 	1.8.6      
+kube-ovn          	kube-system	2       	2026-03-10 21:14:45.799278 +0200 IST	deployed	kube-ovn-v1.15.4                	1.15.4     
+prometheus        	monitoring 	13      	2026-02-17 18:10:54.651505 +0200 IST	deployed	prometheus-28.9.1               	v3.9.1     
+vpa               	kube-system	1       	2026-03-07 19:49:05.681642 +0200 IST	deployed	vertical-pod-autoscaler-11.1.1  	1.5.0      

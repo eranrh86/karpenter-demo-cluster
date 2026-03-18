@@ -1,0 +1,1599 @@
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: yes001
+
+---
+apiVersion: v1
+data:
+  nginx.conf: "user  nginx;
+worker_processes  auto;
+error_log  /var/log/nginx/error.log\
+    \ warn;
+pid        /var/run/nginx.pid;
+
+events {
+  worker_connections  1024;
+\
+    }
+
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+\
+    
+  log_format  main  '$remote_addr - $remote_user [$time_local] \"$request\"\
+    \ '
+                    '$status $body_bytes_sent \"$http_referer\" '
+     \
+    \               '\"$http_user_agent\"';
+
+  access_log  /var/log/nginx/access.log\
+    \  main;
+  sendfile        on;
+  keepalive_timeout  65;
+  gzip  on;
+
+  server\
+    \ {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+   \
+    \ index index.html;
+
+    # Security headers
+    add_header X-Frame-Options\
+    \ \"SAMEORIGIN\";
+    add_header X-Content-Type-Options \"nosniff\";
+
+    #\
+    \ CORS for RUM SDK
+    add_header Access-Control-Allow-Origin \"*\";
+
+    #\
+    \ Main landing page
+    location = / {
+      try_files /index.html =404;
+ \
+    \   }
+
+    # Before demo
+    location /before/ {
+      try_files $uri $uri/\
+    \ /before/index.html;
+    }
+    location = /before {
+      return 301 /before/;
+\
+    \    }
+
+    # After demo
+    location /after/ {
+      try_files $uri $uri/\
+    \ /after/index.html;
+    }
+    location = /after {
+      return 301 /after/;
+\
+    \    }
+
+    # API endpoints (JSON)
+    location /api/ {
+      add_header Content-Type\
+    \ application/json;
+      add_header Cache-Control \"no-cache, no-store\";
+\
+    \      try_files $uri =404;
+    }
+
+    # RUM config JS
+    location = /rum-config.js\
+    \ {
+      add_header Content-Type application/javascript;
+      add_header Cache-Control\
+    \ \"no-cache, no-store\";
+      try_files $uri =404;
+    }
+
+    # Nuxt static\
+    \ assets (serve stubs - they exist to be tracked)
+    location /_nuxt/ {
+  \
+    \    add_header Cache-Control \"max-age=31536000, immutable\";
+      try_files\
+    \ $uri =404;
+    }
+
+    # All other static files
+    location ~* \.(js|css|png|jpg|gif|ico|svg|woff|woff2|ttf|eot)$\
+    \ {
+      expires 1y;
+      add_header Cache-Control \"public, immutable\";
+\
+    \      try_files $uri =404;
+    }
+
+    # 404
+    error_page 404 /index.html;
+\
+    \  }
+}
+"
+kind: ConfigMap
+metadata:
+  name: yes001-nginx
+  namespace: yes001
+
+---
+apiVersion: v1
+data:
+  after.html: "<!DOCTYPE html>
+<html lang=\"he\" dir=\"rtl\">
+<head>
+  <meta charset=\"\
+    UTF-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"\
+    >
+  <title>yes – Live TV & VOD | AFTER Filtering</title>
+
+  <!-- Same Nuxt\
+    \ static assets loaded (they exist in DOM, but RUM will DROP them) -->
+  <link\
+    \ rel=\"stylesheet\" href=\"/_nuxt/AxShimmer.Bh9iye40.css\">
+  <link rel=\"stylesheet\"\
+    \ href=\"/_nuxt/AxInput.Dz-SR9st.css\">
+  <link rel=\"stylesheet\" href=\"/_nuxt/AxHtml.CaG4Z86x.css\"\
+    >
+  <link rel=\"stylesheet\" href=\"/_nuxt/AxNavFloatingSearchResultElement.DTSkD5s1.css\"\
+    >
+  <link rel=\"stylesheet\" href=\"/_nuxt/AxCard.Bk2XyZ9f.css\">
+  <link rel=\"\
+    stylesheet\" href=\"/_nuxt/AxButton.Cm3LpA8s.css\">
+
+  <script src=\"/_nuxt/cH0Jb-HO.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/RSfW2Un7.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/CWXFq0fu.js\" defer></script>
+  <script src=\"/_nuxt/IvHwDpZr.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/DF0rLa_K.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/f8Jv3ua.js\" defer></script>
+  <script src=\"/_nuxt/D1AUqKZU.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/CC9DBTh0.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/Dn3LRy0K.js\" defer></script>
+  <script src=\"/_nuxt/kF0i_yMn.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/B3oKhHXL.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/BPeAD86k.js\" defer></script>
+  <script src=\"/_nuxt/D0RDGNUg.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/Xo1o1g7.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/DEXD331A.js\" defer></script>
+
+  <!-- Datadog RUM config -->
+\
+    \  <script src=\"/rum-config.js\"></script>
+
+  <!-- Datadog RUM SDK - WITH smart\
+    \ beforeSend filtering -->
+  <script>
+    (function(h,o,u,n,d) {
+      h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}};
+\
+    \      d=o.createElement(u);d.async=1;d.src=n;
+      n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n);
+\
+    \    })(window,document,'script','https://www.datadoghq-browser-agent.com/us1/v6/datadog-rum.js','DD_RUM');
+\
+    
+    // ✅ SMART FILTERING REGEX
+    // Drops: /_nuxt/*.{js,css,map}, fonts,\
+    \ images, favicon, vendor bundles
+    var STATIC_ASSET_RE = /\/_nuxt\/.*|\\
+    .(?:js|css|map|woff2?|ttf|eot|png|jpe?g|gif|svg|ico|webp)(?:\?.*)?$/i;
+
+  \
+    \  DD_RUM.onReady(function() {
+      DD_RUM.init({
+        applicationId: window.DD_RUM_APP_ID,
+\
+    \        clientToken: window.DD_RUM_CLIENT_TOKEN,
+        site: window.DD_RUM_SITE\
+    \ || 'datadoghq.com',
+        service: 'yes001-tv-after',
+        env: 'demo',
+\
+    \        version: '1.0.0',
+        sessionSampleRate: 100,
+        sessionReplaySampleRate:\
+    \ 100,
+        defaultPrivacyLevel: 'allow',
+        trackResources: true,
+\
+    \        trackLongTasks: true,
+        trackUserInteractions: true,
+
+     \
+    \   // ✅ RECOMMENDED beforeSend filtering
+        beforeSend: (event, context)\
+    \ => {
+          if (event.type === 'resource') {
+            const url = event.resource\
+    \ ? event.resource.url : '';
+            const type = event.resource ? event.resource.type\
+    \ : '';
+
+            // ✅ KEEP: API calls (XHR / Fetch) — business-critical
+\
+    \            if (type === 'xhr' || type === 'fetch') {
+              console.log('%c[RUM\
+    \ AFTER] ✅ TRACKING API call: ' + url,
+                'color: #4dff91; font-weight:\
+    \ bold');
+              updateEventCounter('api', url);
+              return\
+    \ true;
+            }
+
+            // ❌ DROP: Static assets (/_nuxt/, .js,\
+    \ .css, images, fonts)
+            if (STATIC_ASSET_RE.test(url)) {
+       \
+    \       console.log('%c[RUM AFTER] ❌ DROPPING static asset: ' + url,
+       \
+    \         'color: #ff8c42; font-style: italic');
+              updateEventCounter('dropped',\
+    \ url);
+              return false; // ← Discard — not sent to Datadog
+    \
+    \        }
+          }
+
+          // ✅ KEEP: page views, actions, errors, long\
+    \ tasks
+          if (event.type !== 'resource') {
+            console.log('%c[RUM\
+    \ AFTER] ✅ TRACKING ' + event.type + ' event',
+              'color: #4dff91;\
+    \ font-weight: bold');
+            updateEventCounter('other', event.type);
+\
+    \          }
+
+          return true;
+        }
+      });
+
+      // Start\
+    \ Session Replay recording explicitly (required in SDK v5+)
+      DD_RUM.startSessionReplayRecording();
+\
+    
+      // Set user context (meaningful data for Datadog)
+      DD_RUM.setUser({\
+    \ id: 'demo-user-42', name: 'Demo User', email: 'demo@yes.co.il', plan: 'premium'\
+    \ });
+      DD_RUM.setGlobalContextProperty('app', { type: 'tv_portal', region:\
+    \ 'il', nuxt_version: '3.x' });
+
+      // Simulate API calls
+      setTimeout(()\
+    \ => fetch('/api/channels.json').then(r=>r.json()).catch(()=>{}), 500);
+    \
+    \  setTimeout(() => fetch('/api/programs.json').then(r=>r.json()).catch(()=>{}),\
+    \ 800);
+      setTimeout(() => fetch('/api/user.json').then(r=>r.json()).catch(()=>{}),\
+    \ 1200);
+
+      console.log('%c✅ AFTER MODE: Smart filtering active. Only meaningful\
+    \ events sent to Datadog.',
+        'background: #1a3a1a; color: #4dff91; padding:\
+    \ 4px 12px; border-radius: 4px; font-size: 13px');
+    });
+  </script>
+
+ \
+    \ <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body\
+    \ { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:\
+    \ #0a0a14; color: #fff; }
+    .banner {
+      background: linear-gradient(135deg,\
+    \ #1a4a2a, #1a3a3a);
+      color: white; padding: 14px 24px;
+      display:\
+    \ flex; align-items: center; justify-content: space-between;
+      font-size:\
+    \ 0.9rem; font-weight: 600;
+      border-bottom: 2px solid #4dff91;
+    }
+\
+    \    .banner a { color: #4dff91; text-decoration: none; }
+    nav {
+      background:\
+    \ #0e0e1e; padding: 0 24px;
+      display: flex; align-items: center; gap: 32px;
+\
+    \      height: 64px; border-bottom: 1px solid #1a1a2e;
+    }
+    .nav-logo {\
+    \ font-size: 1.8rem; font-weight: 900; color: #6c63ff; letter-spacing: -1px; }
+\
+    \    .nav-links { display: flex; gap: 24px; flex: 1; }
+    .nav-links a { color:\
+    \ #bbb; text-decoration: none; font-size: 0.9rem; }
+    .nav-links a:hover {\
+    \ color: #fff; }
+    .search-bar { display: flex; align-items: center; gap: 8px;\
+    \ background: #1a1a2e; border-radius: 24px; padding: 8px 16px; }
+    .search-bar\
+    \ input { background: none; border: none; color: #fff; outline: none; font-size:\
+    \ 0.9rem; width: 200px; }
+    .hero {
+      background: linear-gradient(135deg,\
+    \ #031a0f 0%, #0d0d2b 50%, #0a0a14 100%);
+      padding: 60px 32px 40px; position:\
+    \ relative; overflow: hidden;
+    }
+    .hero::before {
+      content: '';\
+    \ position: absolute; top: -50%; right: -10%;
+      width: 600px; height: 600px;
+\
+    \      background: radial-gradient(circle, rgba(77,255,145,0.1) 0%, transparent\
+    \ 70%);
+      border-radius: 50%;
+    }
+    .hero-content { max-width: 600px;\
+    \ position: relative; z-index: 1; }
+    .hero-badge { display: inline-block;\
+    \ background: rgba(77,255,145,0.15); border: 1px solid rgba(77,255,145,0.4); color:\
+    \ #4dff91; padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; margin-bottom:\
+    \ 16px; }
+    .hero h1 { font-size: 2.2rem; font-weight: 800; margin-bottom:\
+    \ 12px; line-height: 1.2; }
+    .hero p { color: #aaa; font-size: 1rem; margin-bottom:\
+    \ 28px; }
+    .hero-btns { display: flex; gap: 12px; flex-wrap: wrap; }
+   \
+    \ .btn-primary { background: #4dff91; color: #0a0a14; padding: 12px 28px; border-radius:\
+    \ 8px; border: none; font-size: 0.95rem; font-weight: 700; cursor: pointer; }
+\
+    \    .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; padding:\
+    \ 12px 28px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); font-size:\
+    \ 0.95rem; cursor: pointer; }
+    .event-counter {
+      position: fixed; top:\
+    \ 80px; left: 20px;
+      background: #0a1a0a; border: 2px solid #4dff91; border-radius:\
+    \ 16px;
+      padding: 20px; width: 260px; z-index: 100; font-size: 0.82rem;
+\
+    \    }
+    .event-counter h3 { color: #4dff91; margin-bottom: 14px; font-size:\
+    \ 0.9rem; }
+    .counter-row { display: flex; justify-content: space-between;\
+    \ padding: 6px 0; border-bottom: 1px solid #1a2a1a; }
+    .counter-row:last-child\
+    \ { border-bottom: none; }
+    .counter-label { color: #ccc; }
+    .counter-value\
+    \ { font-weight: 700; font-size: 1.1rem; }
+    .counter-value.green { color:\
+    \ #4dff91; }
+    .counter-value.orange { color: #ff8c42; }
+    .savings-bar\
+    \ { background: #0d1a0d; border-radius: 8px; padding: 10px 12px; margin-top: 12px;\
+    \ }
+    .savings-label { font-size: 0.72rem; color: #4dff91; margin-bottom: 6px;\
+    \ font-weight: 600; }
+    .bar { background: #1a2a1a; border-radius: 4px; height:\
+    \ 8px; overflow: hidden; }
+    .bar-fill { height: 100%; background: linear-gradient(90deg,\
+    \ #4dff91, #00d4aa); border-radius: 4px; transition: width 0.5s; }
+    .event-log-green\
+    \ { max-height: 120px; overflow-y: auto; margin-top: 10px; }
+    .log-entry-keep\
+    \ { font-size: 0.72rem; color: #4dff91; padding: 2px 0; }
+    .log-entry-drop\
+    \ { font-size: 0.72rem; color: #ff8c42; opacity: 0.7; text-decoration: line-through;\
+    \ padding: 2px 0; }
+    .section { padding: 32px; }
+    .section-title { font-size:\
+    \ 1.1rem; font-weight: 700; margin-bottom: 20px; color: #ddd; }
+    .channels-grid\
+    \ { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));\
+    \ gap: 16px; }
+    .channel-card { background: #12122a; border-radius: 12px;\
+    \ padding: 20px 16px; cursor: pointer; transition: transform 0.2s; text-align:\
+    \ center; border: 1px solid #1e1e3a; }
+    .channel-card:hover { transform: scale(1.04);\
+    \ background: #1a1a3a; }
+    .channel-icon { font-size: 2rem; margin-bottom:\
+    \ 10px; }
+    .channel-name { font-size: 0.85rem; color: #ccc; }
+    .program-list\
+    \ { display: flex; flex-direction: column; gap: 12px; }
+    .program-item { background:\
+    \ #12122a; border-radius: 12px; padding: 16px 20px; display: flex; align-items:\
+    \ center; gap: 16px; border: 1px solid #1e1e3a; cursor: pointer; transition: background\
+    \ 0.2s; }
+    .program-item:hover { background: #1a1a3a; }
+    .program-time\
+    \ { color: #6c63ff; font-size: 0.85rem; font-weight: 700; min-width: 60px; }
+\
+    \    .program-info h4 { font-size: 0.95rem; margin-bottom: 4px; }
+    .program-info\
+    \ p { font-size: 0.8rem; color: #888; }
+    .program-live { background: #ff4d4d;\
+    \ color: white; font-size: 0.65rem; font-weight: 700; padding: 2px 8px; border-radius:\
+    \ 4px; margin-right: auto; }
+    .tracking-summary {
+      background: #0d1a0d;\
+    \ border: 1px solid #2a4a2a; border-radius: 12px;
+      padding: 20px; margin:\
+    \ 16px 32px;
+    }
+    .tracking-summary h3 { color: #4dff91; margin-bottom:\
+    \ 14px; font-size: 0.95rem; }
+    .tracking-grid { display: grid; grid-template-columns:\
+    \ repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .tracking-item { display:\
+    \ flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+    .tracking-item\
+    \ .tick { color: #4dff91; }
+    .tracking-item .cross { color: #ff8c42; }
+ \
+    \   footer { background: #0e0e1e; padding: 24px 32px; text-align: center; color:\
+    \ #555; font-size: 0.8rem; margin-top: 40px; }
+  </style>
+</head>
+<body>
+
+\
+    \  <div class=\"banner\">
+    ✅ AFTER MODE — Smart beforeSend filtering active.\
+    \ Only meaningful events sent to Datadog.
+    &nbsp;|&nbsp; <a href=\"/before/\"\
+    >← Switch to BEFORE (unfiltered)</a>
+    &nbsp;|&nbsp; <a href=\"/\">← Back to\
+    \ Demo Home</a>
+  </div>
+
+  <nav>
+    <div class=\"nav-logo\">yes</div>
+\
+    \    <div class=\"nav-links\">
+      <a href=\"#\" onclick=\"trackNav('live')\"\
+    >ערוצים חיים</a>
+      <a href=\"#\" onclick=\"trackNav('vod')\">סדרות וסרטים</a>
+\
+    \      <a href=\"#\" onclick=\"trackNav('sports')\">ספורט</a>
+      <a href=\"\
+    #\" onclick=\"trackNav('kids')\">ילדים</a>
+      <a href=\"#\" onclick=\"trackNav('guide')\"\
+    >מדריך שידורים</a>
+    </div>
+    <div class=\"search-bar\">
+      <span>🔍\
+    </span>
+      <input type=\"text\" placeholder=\"חיפוש...\" id=\"searchInput\"\
+    \ onkeyup=\"handleSearch(this.value)\">
+    </div>
+  </nav>
+
+  <!-- Event\
+    \ Counter -->
+  <div class=\"event-counter\">
+    <h3>✅ RUM Events (AFTER)</h3>
+\
+    \    <div class=\"counter-row\">
+      <span class=\"counter-label\">✅ Sent to\
+    \ Datadog</span>
+      <span class=\"counter-value green\" id=\"sentCount\">0</span>
+\
+    \    </div>
+    <div class=\"counter-row\">
+      <span class=\"counter-label\"\
+    >❌ Dropped (static)</span>
+      <span class=\"counter-value orange\" id=\"droppedCount\"\
+    >0</span>
+    </div>
+    <div class=\"counter-row\">
+      <span class=\"counter-label\"\
+    >Reduction</span>
+      <span class=\"counter-value green\" id=\"reductionPct\"\
+    >0%</span>
+    </div>
+    <div class=\"counter-row\">
+      <span class=\"\
+    counter-label\">Page Views</span>
+      <span class=\"counter-value green\">1</span>
+\
+    \    </div>
+    <div class=\"savings-bar\">
+      <div class=\"savings-label\"\
+    >💰 Volume Savings</div>
+      <div class=\"bar\"><div class=\"bar-fill\"\
+    \ id=\"savingsBar\" style=\"width:0%\"></div></div>
+    </div>
+    <div class=\"\
+    event-log-green\" id=\"eventLog\"></div>
+  </div>
+
+  <!-- Hero -->
+  <div\
+    \ class=\"hero\">
+    <div class=\"hero-content\">
+      <div class=\"hero-badge\"\
+    >✅ FILTERED · Smart RUM</div>
+      <h1>הדגמה חיה: RUM עם סינון חכם</h1>
+  \
+    \    <p>אותם קבצי Nuxt נטענים — אבל RUM מסנן אותם. רק קריאות API, אינטראקציות\
+    \ משתמש ושגיאות נשלחות ל-Datadog.</p>
+      <div class=\"hero-btns\">
+     \
+    \   <button class=\"btn-primary\" onclick=\"simulateVideoPlay()\">▶ הפעל תוכנית</button>
+\
+    \        <button class=\"btn-secondary\" onclick=\"simulateSearch()\">🔍\
+    \ חיפוש</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- What's tracked\
+    \ -->
+  <div class=\"tracking-summary\">
+    <h3>📊 What gets tracked\
+    \ in Datadog (AFTER filtering)</h3>
+    <div class=\"tracking-grid\">
+     \
+    \ <div class=\"tracking-item\"><span class=\"tick\">✅</span> Page Views (all)</div>
+\
+    \      <div class=\"tracking-item\"><span class=\"tick\">✅</span> User Actions\
+    \ (clicks)</div>
+      <div class=\"tracking-item\"><span class=\"tick\">✅</span>\
+    \ API calls (XHR/Fetch)</div>
+      <div class=\"tracking-item\"><span class=\"\
+    tick\">✅</span> Core Web Vitals (LCP, INP, CLS)</div>
+      <div class=\"tracking-item\"\
+    ><span class=\"tick\">✅</span> JavaScript Errors</div>
+      <div class=\"tracking-item\"\
+    ><span class=\"tick\">✅</span> Long Tasks</div>
+      <div class=\"tracking-item\"\
+    ><span class=\"cross\">❌</span> /_nuxt/*.js (dropped)</div>
+      <div class=\"\
+    tracking-item\"><span class=\"cross\">❌</span> /_nuxt/*.css (dropped)</div>
+\
+    \      <div class=\"tracking-item\"><span class=\"cross\">❌</span> Fonts / Images\
+    \ (dropped)</div>
+      <div class=\"tracking-item\"><span class=\"cross\">❌</span>\
+    \ Vendor bundles (dropped)</div>
+    </div>
+  </div>
+
+  <!-- Channels -->
+\
+    \  <div class=\"section\">
+    <div class=\"section-title\">📺 ערוצים\
+    \ חיים</div>
+    <div class=\"channels-grid\">
+      <div class=\"channel-card\"\
+    \ onclick=\"changeChannel('Yes 1')\"><div class=\"channel-icon\">1️⃣</div><div\
+    \ class=\"channel-name\">Yes 1</div></div>
+      <div class=\"channel-card\"\
+    \ onclick=\"changeChannel('Yes Drama')\"><div class=\"channel-icon\">🎭\
+    </div><div class=\"channel-name\">Yes Drama</div></div>
+      <div class=\"channel-card\"\
+    \ onclick=\"changeChannel('Yes Comedy')\"><div class=\"channel-icon\">😂\
+    </div><div class=\"channel-name\">Yes Comedy</div></div>
+      <div class=\"\
+    channel-card\" onclick=\"changeChannel('Yes Sport 1')\"><div class=\"channel-icon\"\
+    >⚽</div><div class=\"channel-name\">Yes Sport 1</div></div>
+      <div class=\"\
+    channel-card\" onclick=\"changeChannel('Yes Kids')\"><div class=\"channel-icon\"\
+    >👶</div><div class=\"channel-name\">Yes Kids</div></div>
+      <div\
+    \ class=\"channel-card\" onclick=\"changeChannel('Yes Docu')\"><div class=\"channel-icon\"\
+    >🎬</div><div class=\"channel-name\">Yes Docu</div></div>
+      <div\
+    \ class=\"channel-card\" onclick=\"changeChannel('Yes Stars')\"><div class=\"\
+    channel-icon\">⭐</div><div class=\"channel-name\">Yes Stars</div></div>
+    \
+    \  <div class=\"channel-card\" onclick=\"changeChannel('Kan 11')\"><div class=\"\
+    channel-icon\">📡</div><div class=\"channel-name\">Kan 11</div></div>
+\
+    \    </div>
+  </div>
+
+  <!-- Program Guide -->
+  <div class=\"section\">
+\
+    \    <div class=\"section-title\">📋 מדריך שידורים – הערב</div>
+    <div\
+    \ class=\"program-list\">
+      <div class=\"program-item\" onclick=\"selectProgram('חדשות\
+    \ הערב')\">
+        <div class=\"program-time\">20:00</div>
+        <div class=\"\
+    program-info\"><h4>חדשות הערב</h4><p>סיכום חדשות יומי | Yes 1</p></div>
+    \
+    \    <span class=\"program-live\">LIVE</span>
+      </div>
+      <div class=\"\
+    program-item\" onclick=\"selectProgram('הארץ המובטחת')\">
+        <div class=\"\
+    program-time\">21:00</div>
+        <div class=\"program-info\"><h4>הארץ המובטחת</h4><p>סדרה\
+    \ דרמטית | עונה 3 פרק 8 | Yes Drama</p></div>
+      </div>
+      <div class=\"\
+    program-item\" onclick=\"selectProgram('ליגת האלופות')\">
+        <div class=\"\
+    program-time\">21:30</div>
+        <div class=\"program-info\"><h4>ליגת האלופות\
+    \ – שידור חי</h4><p>מנצ'סטר יונייטד מול ריאל מדריד | Yes Sport 1</p></div>
+ \
+    \       <span class=\"program-live\">LIVE</span>
+      </div>
+      <div class=\"\
+    program-item\" onclick=\"selectProgram('The Bear')\">
+        <div class=\"program-time\"\
+    >22:00</div>
+        <div class=\"program-info\"><h4>The Bear</h4><p>עונה 4 ·\
+    \ פרמיירה | Yes Comedy</p></div>
+      </div>
+      <div class=\"program-item\"\
+    \ onclick=\"selectProgram('מסע אל הלא נודע')\">
+        <div class=\"program-time\"\
+    >23:00</div>
+        <div class=\"program-info\"><h4>מסע אל הלא נודע</h4><p>דוקומנטרי\
+    \ | Yes Docu</p></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+   \
+    \ yes001 Demo App · Datadog RUM · After Filtering · ~83% reduction in resource\
+    \ events · Support Ticket #2500774
+  </footer>
+
+  <script>
+    let sentCount\
+    \ = 0, droppedCount = 0;
+
+    function updateEventCounter(type, label) {
+ \
+    \     if (type === 'dropped') {
+        droppedCount++;
+        document.getElementById('droppedCount').textContent\
+    \ = droppedCount;
+      } else {
+        sentCount++;
+        document.getElementById('sentCount').textContent\
+    \ = sentCount;
+      }
+      const total = sentCount + droppedCount;
+     \
+    \ const pct = total > 0 ? Math.round((droppedCount / total) * 100) : 0;
+    \
+    \  document.getElementById('reductionPct').textContent = pct + '%';
+      document.getElementById('savingsBar').style.width\
+    \ = pct + '%';
+
+      const log = document.getElementById('eventLog');
+   \
+    \   const entry = document.createElement('div');
+      entry.className = type\
+    \ === 'dropped' ? 'log-entry-drop' : 'log-entry-keep';
+      const name = (label\
+    \ || '').split('/').pop().substring(0, 28);
+      entry.textContent = (type ===\
+    \ 'dropped' ? '❌ ' : '✅ ') + name;
+      log.insertBefore(entry, log.firstChild);
+\
+    \      if (log.children.length > 20) log.removeChild(log.lastChild);
+    }
+
+\
+    \    function changeChannel(name) {
+      console.log('[RUM AFTER] ✅ Custom Action:\
+    \ channel_changed = ' + name);
+      if (window.DD_RUM && DD_RUM.addAction) DD_RUM.addAction('channel_changed',\
+    \ { channel: name, timestamp: new Date().toISOString() });
+      alert('Switched\
+    \ to ' + name + '\n\n✅ [RUM Custom Action: channel_changed]\nThis IS tracked\
+    \ — it\'s a meaningful user action!');
+    }
+
+    function selectProgram(title)\
+    \ {
+      if (window.DD_RUM && DD_RUM.addAction) DD_RUM.addAction('program_selected',\
+    \ { title: title, timestamp: new Date().toISOString() });
+      console.log('[RUM\
+    \ AFTER] ✅ Custom Action: program_selected = ' + title);
+    }
+
+    function\
+    \ simulateVideoPlay() {
+      if (window.DD_RUM && DD_RUM.addAction) DD_RUM.addAction('video_play',\
+    \ { content: 'Live TV', quality: 'HD' });
+      console.log('[RUM AFTER] ✅ Custom\
+    \ Action: video_play');
+      alert('▶ Video started\n\n✅ [RUM Custom Action:\
+    \ video_play]\nThis IS tracked — it\'s a meaningful event!');
+    }
+
+   \
+    \ function simulateSearch() {
+      const query = prompt('Search for a show or\
+    \ channel:', 'ספורט');
+      if (query) {
+        if (window.DD_RUM && DD_RUM.addAction)
+\
+    \          DD_RUM.addAction('search_performed', { query: query, results_count:\
+    \ Math.floor(Math.random() * 20) + 1 });
+        console.log('[RUM AFTER] ✅ Custom\
+    \ Action: search_performed = ' + query);
+      }
+    }
+
+    function handleSearch(val)\
+    \ {
+      if (val.length === 3 && window.DD_RUM && DD_RUM.addAction)
+      \
+    \  DD_RUM.addAction('search_started', { query_length: val.length });
+    }
+
+\
+    \    function trackNav(section) {
+      if (window.DD_RUM && DD_RUM.addAction)\
+    \ DD_RUM.addAction('nav_click', { section: section });
+    }
+  </script>
+</body>
+\
+    </html>
+"
+  before.html: "<!DOCTYPE html>
+<html lang=\"he\" dir=\"rtl\">
+<head>
+  <meta charset=\"\
+    UTF-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"\
+    >
+  <title>yes – Live TV & VOD | BEFORE Filtering</title>
+
+  <!-- Load ALL\
+    \ Nuxt static assets (simulating yes.co.il) -->
+  <link rel=\"stylesheet\" href=\"\
+    /_nuxt/AxShimmer.Bh9iye40.css\">
+  <link rel=\"stylesheet\" href=\"/_nuxt/AxInput.Dz-SR9st.css\"\
+    >
+  <link rel=\"stylesheet\" href=\"/_nuxt/AxHtml.CaG4Z86x.css\">
+  <link rel=\"\
+    stylesheet\" href=\"/_nuxt/AxNavFloatingSearchResultElement.DTSkD5s1.css\">
+\
+    \  <link rel=\"stylesheet\" href=\"/_nuxt/AxCard.Bk2XyZ9f.css\">
+  <link rel=\"\
+    stylesheet\" href=\"/_nuxt/AxButton.Cm3LpA8s.css\">
+
+  <script src=\"/_nuxt/cH0Jb-HO.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/RSfW2Un7.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/CWXFq0fu.js\" defer></script>
+  <script src=\"/_nuxt/IvHwDpZr.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/DF0rLa_K.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/f8Jv3ua.js\" defer></script>
+  <script src=\"/_nuxt/D1AUqKZU.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/CC9DBTh0.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/Dn3LRy0K.js\" defer></script>
+  <script src=\"/_nuxt/kF0i_yMn.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/B3oKhHXL.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/BPeAD86k.js\" defer></script>
+  <script src=\"/_nuxt/D0RDGNUg.js\"\
+    \ defer></script>
+  <script src=\"/_nuxt/Xo1o1g7.js\" defer></script>
+  <script\
+    \ src=\"/_nuxt/DEXD331A.js\" defer></script>
+
+  <!-- Datadog RUM config -->
+\
+    \  <script src=\"/rum-config.js\"></script>
+
+  <!-- Datadog RUM SDK - NO beforeSend\
+    \ filtering -->
+  <script>
+    (function(h,o,u,n,d) {
+      h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}};
+\
+    \      d=o.createElement(u);d.async=1;d.src=n;
+      n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n);
+\
+    \    })(window,document,'script','https://www.datadoghq-browser-agent.com/us1/v6/datadog-rum.js','DD_RUM');
+\
+    
+    DD_RUM.onReady(function() {
+      DD_RUM.init({
+        applicationId:\
+    \ window.DD_RUM_APP_ID,
+        clientToken: window.DD_RUM_CLIENT_TOKEN,
+  \
+    \      site: window.DD_RUM_SITE || 'datadoghq.com',
+        service: 'yes001-tv-before',
+\
+    \        env: 'demo',
+        version: '1.0.0',
+        sessionSampleRate: 100,
+\
+    \        sessionReplaySampleRate: 100,
+        defaultPrivacyLevel: 'allow',
+\
+    \        trackResources: true,
+        trackLongTasks: true,
+        trackUserInteractions:\
+    \ true,
+        // ⚠️ NO beforeSend filtering - ALL events including static assets\
+    \ go to Datadog
+        beforeSend: (event, context) => {
+          const url\
+    \ = event.resource ? event.resource.url : '';
+          if (url) {
+        \
+    \    console.log('%c[RUM BEFORE] Allowing Datadog RUM event for URL: ' + url,
+\
+    \              'color: #ff4d4d; font-weight: bold');
+            updateEventCounter('before',\
+    \ url);
+          }
+          return true; // ← Let EVERYTHING through
+   \
+    \     }
+      });
+
+      // Start Session Replay recording explicitly (required\
+    \ in SDK v5+)
+      DD_RUM.startSessionReplayRecording();
+
+      // Simulate\
+    \ API calls that would happen on a real TV portal
+
+      setTimeout(() => fetch('/api/channels.json').catch(()=>{}),\
+    \ 500);
+      setTimeout(() => fetch('/api/programs.json').catch(()=>{}), 800);
+\
+    \      setTimeout(() => fetch('/api/user.json').catch(()=>{}), 1200);
+
+    \
+    \  console.log('%c⚠️ BEFORE MODE: No filtering applied. All resources tracked\
+    \ in Datadog RUM.',
+        'background: #ff4d4d; color: white; padding: 4px\
+    \ 12px; border-radius: 4px; font-size: 13px');
+    });
+  </script>
+
+  <style>
+\
+    \    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family:\
+    \ -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a14;\
+    \ color: #fff; }
+    .banner {
+      background: linear-gradient(135deg, #ff4d4d,\
+    \ #ff6b35);
+      color: white; padding: 14px 24px;
+      display: flex; align-items:\
+    \ center; justify-content: space-between;
+      font-size: 0.9rem; font-weight:\
+    \ 600;
+    }
+    .banner a { color: white; text-decoration: none; opacity: 0.8;\
+    \ }
+    .banner a:hover { opacity: 1; }
+    nav {
+      background: #0e0e1e;\
+    \ padding: 0 24px;
+      display: flex; align-items: center; gap: 32px;
+   \
+    \   height: 64px; border-bottom: 1px solid #1a1a2e;
+    }
+    .nav-logo { font-size:\
+    \ 1.8rem; font-weight: 900; color: #6c63ff; letter-spacing: -1px; }
+    .nav-links\
+    \ { display: flex; gap: 24px; flex: 1; }
+    .nav-links a { color: #bbb; text-decoration:\
+    \ none; font-size: 0.9rem; transition: color 0.2s; }
+    .nav-links a:hover {\
+    \ color: #fff; }
+    .search-bar {
+      display: flex; align-items: center;\
+    \ gap: 8px;
+      background: #1a1a2e; border-radius: 24px; padding: 8px 16px;
+\
+    \    }
+    .search-bar input {
+      background: none; border: none; color:\
+    \ #fff; outline: none;
+      font-size: 0.9rem; width: 200px;
+    }
+    .hero\
+    \ {
+      background: linear-gradient(135deg, #1a0533 0%, #0d0d2b 50%, #0a0a14\
+    \ 100%);
+      padding: 60px 32px 40px;
+      position: relative; overflow:\
+    \ hidden;
+    }
+    .hero::before {
+      content: ''; position: absolute;\
+    \ top: -50%; right: -10%;
+      width: 600px; height: 600px;
+      background:\
+    \ radial-gradient(circle, rgba(108,99,255,0.15) 0%, transparent 70%);
+      border-radius:\
+    \ 50%;
+    }
+    .hero-content { max-width: 600px; position: relative; z-index:\
+    \ 1; }
+    .hero-badge { display: inline-block; background: rgba(108,99,255,0.2);\
+    \ border: 1px solid rgba(108,99,255,0.4); color: #6c63ff; padding: 4px 12px; border-radius:\
+    \ 20px; font-size: 0.78rem; margin-bottom: 16px; }
+    .hero h1 { font-size:\
+    \ 2.2rem; font-weight: 800; margin-bottom: 12px; line-height: 1.2; }
+    .hero\
+    \ p { color: #aaa; font-size: 1rem; margin-bottom: 28px; }
+    .hero-btns { display:\
+    \ flex; gap: 12px; flex-wrap: wrap; }
+    .btn-primary { background: #6c63ff;\
+    \ color: #fff; padding: 12px 28px; border-radius: 8px; border: none; font-size:\
+    \ 0.95rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+\
+    \    .btn-primary:hover { background: #5a52e0; }
+    .btn-secondary { background:\
+    \ rgba(255,255,255,0.1); color: #fff; padding: 12px 28px; border-radius: 8px;\
+    \ border: 1px solid rgba(255,255,255,0.2); font-size: 0.95rem; cursor: pointer;\
+    \ transition: background 0.2s; }
+    .btn-secondary:hover { background: rgba(255,255,255,0.15);\
+    \ }
+    .event-counter {
+      position: fixed; top: 80px; left: 20px;
+   \
+    \   background: #1a0a0a; border: 2px solid #ff4d4d; border-radius: 16px;
+   \
+    \   padding: 20px; width: 240px; z-index: 100;
+      font-size: 0.82rem;
+  \
+    \  }
+    .event-counter h3 { color: #ff4d4d; margin-bottom: 14px; font-size:\
+    \ 0.9rem; }
+    .counter-row { display: flex; justify-content: space-between;\
+    \ align-items: center; padding: 6px 0; border-bottom: 1px solid #2a1515; }
+ \
+    \   .counter-row:last-child { border-bottom: none; }
+    .counter-label { color:\
+    \ #ccc; }
+    .counter-value { font-weight: 700; font-size: 1.1rem; }
+    .counter-value.red\
+    \ { color: #ff4d4d; }
+    .counter-value.gray { color: #888; }
+    .event-log\
+    \ { max-height: 140px; overflow-y: auto; margin-top: 12px; }
+    .event-log-entry\
+    \ { font-size: 0.72rem; color: #ff8080; padding: 3px 0; border-bottom: 1px solid\
+    \ #2a1515; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+\
+    \    .section { padding: 32px; }
+    .section-title { font-size: 1.1rem; font-weight:\
+    \ 700; margin-bottom: 20px; color: #ddd; }
+    .channels-grid { display: grid;\
+    \ grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+\
+    \    .channel-card {
+      background: #12122a; border-radius: 12px; padding:\
+    \ 20px 16px;
+      cursor: pointer; transition: transform 0.2s, background 0.2s;
+\
+    \      text-align: center; border: 1px solid #1e1e3a;
+    }
+    .channel-card:hover\
+    \ { transform: scale(1.04); background: #1a1a3a; }
+    .channel-icon { font-size:\
+    \ 2rem; margin-bottom: 10px; }
+    .channel-name { font-size: 0.85rem; color:\
+    \ #ccc; }
+    .program-list { display: flex; flex-direction: column; gap: 12px;\
+    \ }
+    .program-item {
+      background: #12122a; border-radius: 12px; padding:\
+    \ 16px 20px;
+      display: flex; align-items: center; gap: 16px;
+      border:\
+    \ 1px solid #1e1e3a; cursor: pointer; transition: background 0.2s;
+    }
+  \
+    \  .program-item:hover { background: #1a1a3a; }
+    .program-time { color: #6c63ff;\
+    \ font-size: 0.85rem; font-weight: 700; min-width: 60px; }
+    .program-info\
+    \ h4 { font-size: 0.95rem; margin-bottom: 4px; }
+    .program-info p { font-size:\
+    \ 0.8rem; color: #888; }
+    .program-live { background: #ff4d4d; color: white;\
+    \ font-size: 0.65rem; font-weight: 700; padding: 2px 8px; border-radius: 4px;\
+    \ margin-right: auto; }
+    footer { background: #0e0e1e; padding: 24px 32px;\
+    \ text-align: center; color: #555; font-size: 0.8rem; margin-top: 40px; }
+  </style>
+\
+    </head>
+<body>
+
+  <!-- Warning banner -->
+  <div class=\"banner\">
+    ⚠️\
+    \ &nbsp;BEFORE MODE — No beforeSend filtering. All static assets tracked in Datadog\
+    \ RUM. Open DevTools Console to see the event flood.
+    &nbsp;|&nbsp; <a href=\"\
+    /after/\">→ Switch to AFTER (filtered)</a>
+    &nbsp;|&nbsp; <a href=\"/\">←\
+    \ Back to Demo Home</a>
+  </div>
+
+  <!-- Nav -->
+  <nav>
+    <div class=\"\
+    nav-logo\">yes</div>
+    <div class=\"nav-links\">
+      <a href=\"#\" onclick=\"\
+    trackNav('live')\">ערוצים חיים</a>
+      <a href=\"#\" onclick=\"trackNav('vod')\"\
+    >סדרות וסרטים</a>
+      <a href=\"#\" onclick=\"trackNav('sports')\">ספורט</a>
+\
+    \      <a href=\"#\" onclick=\"trackNav('kids')\">ילדים</a>
+      <a href=\"\
+    #\" onclick=\"trackNav('guide')\">מדריך שידורים</a>
+    </div>
+    <div class=\"\
+    search-bar\">
+      <span>🔍</span>
+      <input type=\"text\" placeholder=\"\
+    חיפוש...\" id=\"searchInput\" onkeyup=\"handleSearch(this.value)\">
+    </div>
+\
+    \  </nav>
+
+  <!-- Event Counter (fixed) -->
+  <div class=\"event-counter\"\
+    >
+    <h3>⚠️ RUM Events Sent (BEFORE)</h3>
+    <div class=\"counter-row\">
+\
+    \      <span class=\"counter-label\">Static Assets</span>
+      <span class=\"\
+    counter-value red\" id=\"staticCount\">0</span>
+    </div>
+    <div class=\"\
+    counter-row\">
+      <span class=\"counter-label\">API Calls</span>
+      <span\
+    \ class=\"counter-value red\" id=\"apiCount\">0</span>
+    </div>
+    <div class=\"\
+    counter-row\">
+      <span class=\"counter-label\">Total Resources</span>
+ \
+    \     <span class=\"counter-value red\" id=\"totalCount\">0</span>
+    </div>
+\
+    \    <div class=\"counter-row\">
+      <span class=\"counter-label\">Page Views</span>
+\
+    \      <span class=\"counter-value red\">1</span>
+    </div>
+    <div class=\"\
+    event-log\" id=\"eventLog\"></div>
+  </div>
+
+  <!-- Hero -->
+  <div class=\"\
+    hero\">
+    <div class=\"hero-content\">
+      <div class=\"hero-badge\">🔴\
+    \ LIVE · עכשיו בשידור</div>
+      <h1>הדגמה חיה: RUM ללא סינון</h1>
+      <p>כל\
+    \ קובץ JavaScript ו-CSS של Nuxt נשלח ל-Datadog RUM כ-Resource Event. ראה את המונה\
+    \ משמאל.</p>
+      <div class=\"hero-btns\">
+        <button class=\"btn-primary\"\
+    \ onclick=\"simulateVideoPlay()\">▶ הפעל תוכנית</button>
+        <button class=\"\
+    btn-secondary\" onclick=\"simulateSearch()\">🔍 חיפוש</button>
+     \
+    \ </div>
+    </div>
+  </div>
+
+  <!-- Channels -->
+  <div class=\"section\"\
+    >
+    <div class=\"section-title\">📺 ערוצים חיים</div>
+    <div class=\"\
+    channels-grid\">
+      <div class=\"channel-card\" onclick=\"changeChannel('Yes\
+    \ 1')\"><div class=\"channel-icon\">1️⃣</div><div class=\"channel-name\">Yes 1</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Yes Drama')\"><div\
+    \ class=\"channel-icon\">🎭</div><div class=\"channel-name\">Yes Drama</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Yes Comedy')\"><div\
+    \ class=\"channel-icon\">😂</div><div class=\"channel-name\">Yes Comedy</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Yes Sport 1')\"><div\
+    \ class=\"channel-icon\">⚽</div><div class=\"channel-name\">Yes Sport 1</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Yes Kids')\"><div\
+    \ class=\"channel-icon\">👶</div><div class=\"channel-name\">Yes Kids</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Yes Docu')\"><div\
+    \ class=\"channel-icon\">🎬</div><div class=\"channel-name\">Yes Docu</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Yes Stars')\"><div\
+    \ class=\"channel-icon\">⭐</div><div class=\"channel-name\">Yes Stars</div></div>
+\
+    \      <div class=\"channel-card\" onclick=\"changeChannel('Kan 11')\"><div class=\"\
+    channel-icon\">📡</div><div class=\"channel-name\">Kan 11</div></div>
+\
+    \    </div>
+  </div>
+
+  <!-- Program Guide -->
+  <div class=\"section\">
+\
+    \    <div class=\"section-title\">📋 מדריך שידורים – הערב</div>
+    <div\
+    \ class=\"program-list\">
+      <div class=\"program-item\" onclick=\"selectProgram('חדשות\
+    \ הערב')\">
+        <div class=\"program-time\">20:00</div>
+        <div class=\"\
+    program-info\">
+          <h4>חדשות הערב</h4>
+          <p>סיכום חדשות יומי\
+    \ | Yes 1</p>
+        </div>
+        <span class=\"program-live\">LIVE</span>
+\
+    \      </div>
+      <div class=\"program-item\" onclick=\"selectProgram('הארץ\
+    \ המובטחת')\">
+        <div class=\"program-time\">21:00</div>
+        <div\
+    \ class=\"program-info\">
+          <h4>הארץ המובטחת</h4>
+          <p>סדרה\
+    \ דרמטית | עונה 3 פרק 8 | Yes Drama</p>
+        </div>
+      </div>
+      <div\
+    \ class=\"program-item\" onclick=\"selectProgram('ליגת האלופות')\">
+        <div\
+    \ class=\"program-time\">21:30</div>
+        <div class=\"program-info\">
+ \
+    \         <h4>ליגת האלופות – שידור חי</h4>
+          <p>מנצ'סטר יונייטד מול ריאל\
+    \ מדריד | Yes Sport 1</p>
+        </div>
+        <span class=\"program-live\"\
+    >LIVE</span>
+      </div>
+      <div class=\"program-item\" onclick=\"selectProgram('The\
+    \ Bear')\">
+        <div class=\"program-time\">22:00</div>
+        <div class=\"\
+    program-info\">
+          <h4>The Bear</h4>
+          <p>עונה 4 · פרמיירה |\
+    \ Yes Comedy</p>
+        </div>
+      </div>
+      <div class=\"program-item\"\
+    \ onclick=\"selectProgram('מסע אל הלא נודע')\">
+        <div class=\"program-time\"\
+    >23:00</div>
+        <div class=\"program-info\">
+          <h4>מסע אל הלא נודע</h4>
+\
+    \          <p>דוקומנטרי | Yes Docu</p>
+        </div>
+      </div>
+    </div>
+\
+    \  </div>
+
+  <footer>
+    yes001 Demo App · Datadog RUM · Before Filtering\
+    \ · Support Ticket #2500774
+  </footer>
+
+  <script>
+    let staticCount =\
+    \ 0, apiCount = 0;
+
+    function updateEventCounter(type, url) {
+      const\
+    \ filename = url.split('/').pop().substring(0, 30);
+      if (url.includes('/_nuxt/')\
+    \ || url.match(/\.(js|css|woff|png|jpg|svg)(\?|$)/)) {
+        staticCount++;
+\
+    \        document.getElementById('staticCount').textContent = staticCount;
+ \
+    \     } else if (url.includes('/api/')) {
+        apiCount++;
+        document.getElementById('apiCount').textContent\
+    \ = apiCount;
+      }
+      document.getElementById('totalCount').textContent\
+    \ = staticCount + apiCount;
+      const log = document.getElementById('eventLog');
+\
+    \      const entry = document.createElement('div');
+      entry.className = 'event-log-entry';
+\
+    \      entry.textContent = url.includes('/_nuxt/') ? '📦 ' + filename\
+    \ : '🔗 ' + filename;
+      log.insertBefore(entry, log.firstChild);
+\
+    \      if (log.children.length > 20) log.removeChild(log.lastChild);
+    }
+
+\
+    \    function changeChannel(name) {
+      console.log('[RUM BEFORE] Channel changed:\
+    \ ' + name + ' — action tracked');
+      if (window.DD_RUM && DD_RUM.addAction)\
+    \ DD_RUM.addAction('channel_changed', { channel: name });
+      alert('Switched\
+    \ to ' + name + '\n\n[RUM Action tracked: channel_changed]');
+    }
+
+   \
+    \ function selectProgram(title) {
+      console.log('[RUM BEFORE] Program selected:\
+    \ ' + title + ' — action tracked');
+      if (window.DD_RUM && DD_RUM.addAction)\
+    \ DD_RUM.addAction('program_selected', { title: title });
+    }
+
+    function\
+    \ simulateVideoPlay() {
+      console.log('[RUM BEFORE] Video play button clicked');
+\
+    \      if (window.DD_RUM && DD_RUM.addAction) DD_RUM.addAction('video_play', {\
+    \ content: 'Live TV' });
+      alert('▶ Video started\n\n[RUM Action tracked:\
+    \ video_play]');
+    }
+
+    function simulateSearch() {
+      const query\
+    \ = prompt('Search for a show or channel:', 'ספורט');
+      if (query && window.DD_RUM\
+    \ && DD_RUM.addAction)
+        DD_RUM.addAction('search_performed', { query:\
+    \ query });
+    }
+
+    function handleSearch(val) {
+      if (val.length >\
+    \ 2 && window.DD_RUM && DD_RUM.addAction)
+        DD_RUM.addAction('search_typing',\
+    \ { query_length: val.length });
+    }
+
+    function trackNav(section) {
+\
+    \      if (window.DD_RUM && DD_RUM.addAction) DD_RUM.addAction('nav_click', {\
+    \ section: section });
+    }
+  </script>
+</body>
+</html>
+"
+  channels.json: "{
+  \"channels\": [
+    {\"id\": 1, \"name\": \"Yes 1\", \"genre\"\
+    : \"General\", \"live\": true, \"viewers\": 45231},
+    {\"id\": 2, \"name\"\
+    : \"Yes Drama\", \"genre\": \"Drama\", \"live\": true, \"viewers\": 23110},
+\
+    \    {\"id\": 3, \"name\": \"Yes Comedy\", \"genre\": \"Comedy\", \"live\": true,\
+    \ \"viewers\": 18540},
+    {\"id\": 4, \"name\": \"Yes Sport 1\", \"genre\":\
+    \ \"Sports\", \"live\": true, \"viewers\": 67890},
+    {\"id\": 5, \"name\":\
+    \ \"Yes Kids\", \"genre\": \"Kids\", \"live\": true, \"viewers\": 12300},
+  \
+    \  {\"id\": 6, \"name\": \"Yes Docu\", \"genre\": \"Documentary\", \"live\": false,\
+    \ \"viewers\": 9870},
+    {\"id\": 7, \"name\": \"Yes Stars\", \"genre\": \"\
+    Entertainment\", \"live\": true, \"viewers\": 15420},
+    {\"id\": 8, \"name\"\
+    : \"Kan 11\", \"genre\": \"News\", \"live\": true, \"viewers\": 34560}
+  ],
+\
+    \  \"total\": 8,
+  \"last_updated\": \"2026-03-09T20:00:00Z\"
+}
+"
+  index.html: "<!DOCTYPE html>
+<html lang=\"he\" dir=\"rtl\">
+<head>
+  <meta charset=\"\
+    UTF-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"\
+    >
+  <title>yes001 – Datadog RUM Demo</title>
+  <style>
+    * { margin: 0; padding:\
+    \ 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system,\
+    \ BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a1a;
+  \
+    \    color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction:\
+    \ column;
+      align-items: center;
+      justify-content: center;
+      padding:\
+    \ 40px 20px;
+    }
+    .logo { font-size: 3rem; font-weight: 900; color: #6c63ff;\
+    \ margin-bottom: 8px; letter-spacing: -2px; }
+    .subtitle { color: #888; margin-bottom:\
+    \ 60px; font-size: 1rem; }
+    .cards { display: flex; gap: 32px; flex-wrap:\
+    \ wrap; justify-content: center; max-width: 900px; }
+    .card {
+      background:\
+    \ #12122a;
+      border-radius: 20px;
+      padding: 40px 36px;
+      width:\
+    \ 380px;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow\
+    \ 0.2s;
+      text-decoration: none;
+      color: inherit;
+      border: 2px\
+    \ solid transparent;
+      position: relative;
+      overflow: hidden;
+   \
+    \ }
+    .card:hover { transform: translateY(-6px); box-shadow: 0 20px 60px rgba(0,0,0,0.5);\
+    \ }
+    .card.before { border-color: #ff4d4d; }
+    .card.after  { border-color:\
+    \ #4dff91; }
+    .card-badge {
+      position: absolute; top: 18px; right: 20px;
+\
+    \      padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight:\
+    \ 700;
+    }
+    .before .card-badge { background: rgba(255,77,77,0.2); color:\
+    \ #ff4d4d; }
+    .after  .card-badge { background: rgba(77,255,145,0.2); color:\
+    \ #4dff91; }
+    .card-icon { font-size: 2.8rem; margin-bottom: 20px; }
+   \
+    \ .card h2 { font-size: 1.5rem; margin-bottom: 12px; }
+    .card p { color: #aaa;\
+    \ font-size: 0.93rem; line-height: 1.6; }
+    .stats { margin-top: 20px; display:\
+    \ flex; gap: 16px; }
+    .stat { background: rgba(255,255,255,0.05); border-radius:\
+    \ 10px; padding: 10px 16px; flex: 1; text-align: center; }
+    .stat-num { font-size:\
+    \ 1.4rem; font-weight: 700; }
+    .stat-label { font-size: 0.7rem; color: #888;\
+    \ margin-top: 2px; }
+    .before .stat-num { color: #ff4d4d; }
+    .after  .stat-num\
+    \ { color: #4dff91; }
+    .arrow { font-size: 1.5rem; margin-top: 24px; opacity:\
+    \ 0.6; }
+    .footer { margin-top: 60px; color: #555; font-size: 0.8rem; text-align:\
+    \ center; }
+    .dd-badge {
+      display: inline-flex; align-items: center;\
+    \ gap: 8px;
+      background: rgba(108, 99, 255, 0.15); border: 1px solid rgba(108,99,255,0.3);
+\
+    \      border-radius: 20px; padding: 6px 16px; margin-bottom: 40px; font-size:\
+    \ 0.85rem; color: #6c63ff;
+    }
+  </style>
+</head>
+<body>
+  <div class=\"\
+    logo\">yes<span style=\"color:#fff\">001</span></div>
+  <div class=\"subtitle\"\
+    >TV Streaming Portal · Datadog RUM Demo</div>
+  <div class=\"dd-badge\">🔴\
+    \ Datadog RUM · Live Demo · Support Ticket #2500774</div>
+  <div class=\"cards\"\
+    >
+    <a href=\"/before/\" class=\"card before\">
+      <span class=\"card-badge\"\
+    >⚠ BEFORE</span>
+      <div class=\"card-icon\">📈</div>
+      <h2>Before\
+    \ Filtering</h2>
+      <p>Simulates the yes.co.il TV frontend — all Nuxt.js static\
+    \ assets tracked in RUM, generating high event volume.</p>
+      <div class=\"\
+    stats\">
+        <div class=\"stat\"><div class=\"stat-num\">24+</div><div class=\"\
+    stat-label\">Resource Events</div></div>
+        <div class=\"stat\"><div class=\"\
+    stat-num\">100%</div><div class=\"stat-label\">Static Assets</div></div>
+   \
+    \     <div class=\"stat\"><div class=\"stat-num\">High</div><div class=\"stat-label\"\
+    >RUM Volume</div></div>
+      </div>
+      <div class=\"arrow\">Open Demo →</div>
+\
+    \    </a>
+    <a href=\"/after/\" class=\"card after\">
+      <span class=\"\
+    card-badge\">✅ AFTER</span>
+      <div class=\"card-icon\">📉</div>
+\
+    \      <h2>After Filtering</h2>
+      <p>Same TV frontend with smart <code>beforeSend</code>\
+    \ filtering — only meaningful events (API calls, actions, errors) reach Datadog.</p>
+\
+    \      <div class=\"stats\">
+        <div class=\"stat\"><div class=\"stat-num\"\
+    >3–5</div><div class=\"stat-label\">Resource Events</div></div>
+        <div\
+    \ class=\"stat\"><div class=\"stat-num\">~83%</div><div class=\"stat-label\">Reduction</div></div>
+\
+    \        <div class=\"stat\"><div class=\"stat-num\">Low</div><div class=\"stat-label\"\
+    >RUM Volume</div></div>
+      </div>
+      <div class=\"arrow\">Open Demo →</div>
+\
+    \    </a>
+  </div>
+  <div class=\"footer\">
+    Deployed on EKS · karpenter-demo\
+    \ · yes001 namespace<br>
+    Open DevTools Console on each page to see RUM filtering\
+    \ in real-time
+  </div>
+</body>
+</html>
+"
+  programs.json: "{
+  \"programs\": [
+    {\"id\": 101, \"channel\": \"Yes 1\",\
+    \      \"time\": \"20:00\", \"title\": \"חדשות הערב\",        \"genre\": \"News\"\
+    ,    \"live\": true,  \"duration\": 60},
+    {\"id\": 102, \"channel\": \"Yes\
+    \ Drama\",   \"time\": \"21:00\", \"title\": \"הארץ המובטחת\",      \"genre\"\
+    : \"Drama\",   \"live\": false, \"duration\": 55},
+    {\"id\": 103, \"channel\"\
+    : \"Yes Sport 1\", \"time\": \"21:30\", \"title\": \"ליגת האלופות\",      \"genre\"\
+    : \"Sports\",  \"live\": true,  \"duration\": 120},
+    {\"id\": 104, \"channel\"\
+    : \"Yes Comedy\",  \"time\": \"22:00\", \"title\": \"The Bear S4\",       \"genre\"\
+    : \"Comedy\",  \"live\": false, \"duration\": 30},
+    {\"id\": 105, \"channel\"\
+    : \"Yes Docu\",    \"time\": \"23:00\", \"title\": \"מסע אל הלא נודע\",   \"genre\"\
+    : \"Docu\",    \"live\": false, \"duration\": 45},
+    {\"id\": 106, \"channel\"\
+    : \"Yes Kids\",    \"time\": \"18:00\", \"title\": \"מאשה והדב\",         \"genre\"\
+    : \"Kids\",    \"live\": false, \"duration\": 25},
+    {\"id\": 107, \"channel\"\
+    : \"Yes Stars\",   \"time\": \"21:00\", \"title\": \"ריאליטי כוכבים\",    \"genre\"\
+    : \"Reality\", \"live\": true,  \"duration\": 90}
+  ],
+  \"total\": 7,
+  \"\
+    prime_time\": \"21:00-23:00\"
+}
+"
+  rum-config.js: 'window.DD_RUM_APP_ID = "<DD_RUM_APP_ID>";
+
+    window.DD_RUM_CLIENT_TOKEN = "<DD_RUM_CLIENT_TOKEN>";
+
+    window.DD_RUM_SITE = "datadoghq.com";
+
+    '
+  user.json: "{
+  \"id\": \"demo-user-42\",
+  \"name\": \"Demo User\",
+  \"email\"\
+    : \"demo@yes.co.il\",
+  \"plan\": \"premium\",
+  \"region\": \"IL\",
+  \"device\"\
+    : \"TV\",
+  \"favorites\": [\"Yes Drama\", \"Yes Sport 1\"],
+  \"watch_time_minutes\"\
+    : 3420
+}
+"
+kind: ConfigMap
+metadata:
+  name: yes001-pages
+  namespace: yes001

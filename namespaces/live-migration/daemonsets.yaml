@@ -1,0 +1,105 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: migration-agent
+  name: migration-agent
+  namespace: live-migration
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: migration-agent
+  template:
+    metadata:
+      labels:
+        app: migration-agent
+    spec:
+      containers:
+      - command:
+        - python
+        - /agent/agent.py
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        image: python:3.11-slim
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: 9090
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 15
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: agent
+        ports:
+        - containerPort: 9090
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        securityContext:
+          privileged: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /agent
+          name: agent-script
+        - mountPath: /kubelet-pki
+          name: kubelet-pki
+          readOnly: true
+        - mountPath: /var/lib/kubelet/checkpoints
+          name: kubelet-checkpoints
+        - mountPath: /host
+          name: host-root
+        - mountPath: /run/containerd/containerd.sock
+          name: containerd-sock
+      dnsPolicy: ClusterFirst
+      hostNetwork: true
+      hostPID: true
+      priorityClassName: system-node-critical
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: migration-agent
+      serviceAccountName: migration-agent
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - operator: Exists
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: migration-agent-script
+        name: agent-script
+      - hostPath:
+          path: /var/lib/kubelet/pki
+          type: ''
+        name: kubelet-pki
+      - hostPath:
+          path: /var/lib/kubelet/checkpoints
+          type: DirectoryOrCreate
+        name: kubelet-checkpoints
+      - hostPath:
+          path: /
+          type: ''
+        name: host-root
+      - hostPath:
+          path: /run/containerd/containerd.sock
+          type: ''
+        name: containerd-sock
+  updateStrategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate

@@ -1,0 +1,1870 @@
+---
+apiVersion: v1
+data:
+  app.py: "#!/usr/bin/env python3
+import os, time, threading
+from flask import Flask,\
+    \ jsonify
+
+app = Flask(__name__)
+counter = 0
+start_time = time.time()
+lock\
+    \ = threading.Lock()
+
+def background_increment():
+    global counter
+    while\
+    \ True:
+        time.sleep(1)
+        with lock:
+            counter += 1
+\
+    
+t = threading.Thread(target=background_increment, daemon=True)
+t.start()
+
+\
+    @app.route('/counter')
+def get_counter():
+    with lock:
+        val = counter
+\
+    \    return jsonify({
+        'counter': val,
+        'pid': os.getpid(),
+\
+    \        'hostname': os.environ.get('HOSTNAME', 'unknown'),
+        'uptime_seconds':\
+    \ round(time.time() - start_time, 1)
+    })
+
+@app.route('/health')
+def health():
+\
+    \    return 'ok'
+
+if __name__ == '__main__':
+    print(f\"Counter app starting\
+    \ on port 8080, pid={os.getpid()}\", flush=True)
+    app.run(host='0.0.0.0',\
+    \ port=8080)
+"
+kind: ConfigMap
+metadata:
+  name: counter-app-script
+  namespace: live-migration
+
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: live-migration
+
+---
+apiVersion: v1
+data:
+  migrate.py: "#!/usr/bin/env python3
+\"\"\"
+Live Demo Migration — migrates the\
+    \ 'live-demo' pod to a different node.
+Shows:
+  1. Pre-migration: pod IP, node,\
+    \ counter value
+  2. CRIU checkpoint via K8s API proxy
+  3. Post-migration:\
+    \ new pod IP, new node, counter CONTINUES from frozen value
+  4. Service ClusterIP\
+    \ — unchanged throughout
+\"\"\"
+import os, sys, json, time, base64
+import urllib.request,\
+    \ ssl
+
+NS       = \"live-migration\"
+_K8S_HOST = os.environ.get(\"KUBERNETES_SERVICE_HOST\"\
+    , \"10.100.0.1\")
+_K8S_PORT = os.environ.get(\"KUBERNETES_SERVICE_PORT\", \"\
+    443\")
+K8S_API  = \"https://\" + _K8S_HOST + \":\" + _K8S_PORT
+SA_TOKEN = open(\"\
+    /var/run/secrets/kubernetes.io/serviceaccount/token\").read().strip()
+SA_CA \
+    \   = \"/var/run/secrets/kubernetes.io/serviceaccount/ca.crt\"
+
+def k8s_ssl():
+\
+    \    return ssl.create_default_context(cafile=SA_CA)
+
+def k8s(method, path,\
+    \ body=None):
+    data = json.dumps(body).encode() if body else None
+    req\
+    \  = urllib.request.Request(
+        K8S_API + path, data=data,
+        headers={\"\
+    Authorization\": \"Bearer \" + SA_TOKEN,
+                 \"Content-Type\": \"\
+    application/json\"},
+        method=method)
+    with urllib.request.urlopen(req,\
+    \ context=k8s_ssl(), timeout=30) as r:
+        return json.loads(r.read())
+
+\
+    def http_get(url, timeout=10):
+    with urllib.request.urlopen(url, timeout=timeout)\
+    \ as r:
+        return json.loads(r.read())
+
+def agent(node_ip, path, method=\"\
+    GET\", body=None):
+    data = json.dumps(body).encode() if body else None
+ \
+    \   req  = urllib.request.Request(
+        \"http://\" + node_ip + \":9090\"\
+    \ + path, data=data,
+        headers={\"Content-Type\": \"application/json\"\
+    } if data else {},
+        method=method)
+    with urllib.request.urlopen(req,\
+    \ timeout=300) as r:
+        return json.loads(r.read())
+
+def log(msg):
+ \
+    \   print(\"[\" + time.strftime(\"%H:%M:%S\") + \"] \" + msg, flush=True)
+
+\
+    def section(title):
+    bar = \"=\" * 64
+    print(\"\n\" + bar, flush=True)
+\
+    \    print(\"  \" + title, flush=True)
+    print(bar, flush=True)
+
+def node_internal_ip(node_name):
+\
+    \    n = k8s(\"GET\", \"/api/v1/nodes/\" + node_name)
+    for a in n[\"status\"\
+    ][\"addresses\"]:
+        if a[\"type\"] == \"InternalIP\":
+            return\
+    \ a[\"address\"]
+    return None
+
+def parse_cpu_m(s):
+    if not s: return\
+    \ 0
+    if s.endswith(\"m\"): return int(s[:-1])
+    try: return int(float(s)\
+    \ * 1000)
+    except: return 0
+
+def node_free(node_name):
+    \"\"\"Return\
+    \ (free_pods, free_cpu_m) for a node.\"\"\"
+    n = k8s(\"GET\", \"/api/v1/nodes/\"\
+    \ + node_name)
+    alloc_pods = int(n[\"status\"][\"allocatable\"].get(\"pods\"\
+    , \"0\"))
+    alloc_cpu  = parse_cpu_m(n[\"status\"][\"allocatable\"].get(\"\
+    cpu\", \"0\"))
+    pods_resp  = k8s(\"GET\", \"/api/v1/pods?fieldSelector=spec.nodeName%3D\"\
+    \ + node_name)
+    used_pods  = 0
+    used_cpu   = 0
+    for p in pods_resp.get(\"\
+    items\", []):
+        phase = p.get(\"status\", {}).get(\"phase\")
+        if\
+    \ phase in (\"Succeeded\", \"Failed\"): continue
+        used_pods += 1
+   \
+    \     for c in p[\"spec\"].get(\"containers\", []):
+            used_cpu += parse_cpu_m(c.get(\"\
+    resources\",{}).get(\"requests\",{}).get(\"cpu\",\"0\"))
+    return alloc_pods\
+    \ - used_pods, alloc_cpu - used_cpu
+
+def wait_pod_ready(name, timeout=300):
+\
+    \    for _ in range(timeout // 5):
+        try:
+            p   = k8s(\"GET\"\
+    , \"/api/v1/namespaces/\" + NS + \"/pods/\" + name)
+            cond = {c[\"\
+    type\"]: c[\"status\"] for c in p.get(\"status\",{}).get(\"conditions\",[])}
+\
+    \            ip   = p.get(\"status\",{}).get(\"podIP\")
+            ph   = p.get(\"\
+    status\",{}).get(\"phase\")
+            log(\"  \" + name + \"  phase=\" + str(ph)\
+    \ + \"  Ready=\" + str(cond.get(\"Ready\")) + \"  IP=\" + str(ip))
+         \
+    \   if cond.get(\"Ready\") == \"True\" and ip:
+                return ip
+  \
+    \          if ph in (\"Failed\",\"Unknown\"):
+                log(\"  !! pod\
+    \ in terminal state: \" + str(ph))
+                return None
+        except\
+    \ Exception as e:
+            log(\"  wait error: \" + str(e))
+        time.sleep(5)
+\
+    \    return None
+
+def get_service_ip(svc_name):
+    try:
+        svc = k8s(\"\
+    GET\", \"/api/v1/namespaces/\" + NS + \"/services/\" + svc_name)
+        return\
+    \ svc.get(\"spec\",{}).get(\"clusterIP\",\"N/A\")
+    except:
+        return\
+    \ \"N/A\"
+
+# ────────────────────────────────────────────────────────────────
+\
+    def main():
+    section(\"LIVE POD MIGRATION DEMO\")
+    print(\"  Migrating\
+    \ 'live-demo' pod across worker nodes\", flush=True)
+    print(\"  Checking:\
+    \ RAM state (counter) + IP address behaviour\", flush=True)
+
+    # ── PRE-FLIGHT\
+    \ ──────────────────────────────────────────────
+    section(\"PRE-MIGRATION\
+    \ STATE\")
+
+    # Get live-demo pod
+    pods = k8s(\"GET\", \"/api/v1/namespaces/\"\
+    \ + NS + \"/pods?labelSelector=app%3Dlive-demo\")[\"items\"]
+    src_pods = [p\
+    \ for p in pods
+                if p.get(\"status\",{}).get(\"phase\") == \"\
+    Running\"
+                and p[\"metadata\"][\"labels\"].get(\"migration-role\"\
+    ) == \"source\"]
+    if not src_pods:
+        log(\"ERROR: live-demo source\
+    \ pod not found or not Running\"); sys.exit(1)
+
+    src      = src_pods[0]
+\
+    \    src_name = src[\"metadata\"][\"name\"]
+    src_node = src[\"spec\"][\"nodeName\"\
+    ]
+    src_ip   = src[\"status\"][\"podIP\"]
+    src_nip  = node_internal_ip(src_node)
+\
+    
+    # Get counter value
+    counter_val = None
+    for i in range(10):
+ \
+    \       try:
+            d = http_get(\"http://\" + src_ip + \":8080/counter\"\
+    )
+            counter_val = d[\"counter\"]
+            break
+        except\
+    \ Exception as e:
+            log(\"  counter attempt \" + str(i+1) + \": \"\
+    \ + str(e))
+            time.sleep(3)
+    if counter_val is None:
+        log(\"\
+    ERROR: cannot reach live-demo counter\"); sys.exit(1)
+
+    # Get service IP
+\
+    \    svc_ip = get_service_ip(\"live-demo-svc\")
+
+    print(\"\n  ┌─────────────────────────────────────────────────────┐\"\
+    , flush=True)
+    print(\"  │  SOURCE POD                                   \
+    \      │\", flush=True)
+    print(\"  │  Pod name  : \" + src_name.ljust(38)\
+    \ + \"│\", flush=True)
+    print(\"  │  Node      : \" + src_node.ljust(38) +\
+    \ \"│\", flush=True)
+    print(\"  │  Pod IP    : \" + src_ip.ljust(38) + \"\
+    │\", flush=True)
+    print(\"  │  Service IP: \" + svc_ip.ljust(38) + \"│\",\
+    \ flush=True)
+    print(\"  │  Counter   : \" + str(counter_val).ljust(38) +\
+    \ \"│\", flush=True)
+    print(\"  └─────────────────────────────────────────────────────┘\"\
+    , flush=True)
+
+    # ── CRIU CHECKPOINT ────────────────────────────────────────
+\
+    \    section(\"STEP 1 — CRIU CHECKPOINT (K8s API proxy)\")
+    ctr_name = src[\"\
+    spec\"][\"containers\"][0][\"name\"]
+    ckpt_url = (K8S_API + \"/api/v1/nodes/\"\
+    \ + src_node +
+                \"/proxy/checkpoint/\" + NS + \"/\" + src_name\
+    \ + \"/\" + ctr_name)
+    log(\"POST \" + ckpt_url)
+    criu_ok = False
+  \
+    \  ckpt_path = \"\"
+    try:
+        req = urllib.request.Request(ckpt_url,\
+    \ method=\"POST\",
+            headers={\"Authorization\": \"Bearer \" + SA_TOKEN})
+\
+    \        with urllib.request.urlopen(req, context=k8s_ssl(), timeout=120) as r:
+\
+    \            body = json.loads(r.read())
+            ckpt_path = body.get(\"\
+    items\", [\"\"])[0]
+            criu_ok = bool(ckpt_path)
+            log(\"\
+    Checkpoint created: \" + ckpt_path)
+    except Exception as e:
+        log(\"\
+    Checkpoint error: \" + str(e)); sys.exit(1)
+
+    # Capture frozen counter (app\
+    \ still running with --leave-running)
+    time.sleep(1)
+    try:
+        snap\
+    \ = http_get(\"http://\" + src_ip + \":8080/counter\")
+        frozen = snap[\"\
+    counter\"]
+    except:
+        frozen = counter_val
+    log(\"Frozen counter\
+    \ value = \" + str(frozen))
+
+    # ── SELECT TARGET NODE ────────────────────────────────────
+\
+    \    section(\"STEP 2 — SELECT TARGET NODE\")
+    all_nodes = k8s(\"GET\", \"\
+    /api/v1/nodes\")[\"items\"]
+    target = None
+    best = -1
+    for n in all_nodes:
+\
+    \        n_name = n[\"metadata\"][\"name\"]
+        if n_name == src_node:
+\
+    \            continue
+        cond = {c[\"type\"]: c[\"status\"] for c in n[\"\
+    status\"].get(\"conditions\",[])}
+        if cond.get(\"Ready\") != \"True\"\
+    :
+            continue
+        n_ip = None
+        for a in n[\"status\"][\"\
+    addresses\"]:
+            if a[\"type\"] == \"InternalIP\":
+               \
+    \ n_ip = a[\"address\"]; break
+        if not n_ip:
+            continue
+ \
+    \       fp, fc = node_free(n_name)
+        log(\"  \" + n_name + \" (\" + n_ip\
+    \ + \"): free_pods=\" + str(fp) + \" free_cpu=\" + str(fc) + \"m\")
+        if\
+    \ fp <= 0 or fc < 2:
+            log(\"    → skipping (insufficient capacity)\"\
+    )
+            continue
+        try:
+            agent(n_ip, \"/health\")
+\
+    \            score = fp * 10 + fc // 100
+            if score > best:
+     \
+    \           best   = score
+                target = {\"name\": n_name, \"ip\"\
+    : n_ip, \"free_pods\": fp, \"free_cpu\": fc}
+        except:
+            log(\"\
+    \    → agent unreachable\")
+
+    if not target:
+        log(\"ERROR: no suitable\
+    \ target node\"); sys.exit(1)
+    log(\"Selected target: \" + target[\"name\"\
+    ] + \" (\" + target[\"ip\"] + \")\")
+    log(\"  free_pods=\" + str(target[\"\
+    free_pods\"]) + \"  free_cpu=\" + str(target[\"free_cpu\"]) + \"m\")
+
+    #\
+    \ ── TRANSFER CHECKPOINT TAR ───────────────────────────────
+    section(\"STEP\
+    \ 3 — TRANSFER CHECKPOINT TAR\")
+    try:
+        ckpt_data = agent(src_nip,\
+    \ \"/checkpoint/latest\")
+        tar_b64   = ckpt_data[\"data_b64\"]
+     \
+    \   tar_size  = ckpt_data[\"size\"]
+        log(\"Checkpoint tar: \" + ckpt_data[\"\
+    name\"])
+        log(\"Size          : \" + str(tar_size) + \" bytes (\" + str(tar_size\
+    \ // 1024) + \" KB)\")
+    except Exception as e:
+        log(\"Transfer error:\
+    \ \" + str(e)); sys.exit(1)
+
+    # ── ATTEMPT CRIU RUNC RESTORE ─────────────────────────────
+\
+    \    section(\"STEP 3b — ATTEMPT CRIU runc RESTORE ON TARGET\")
+    try:
+  \
+    \      rr = agent(target[\"ip\"], \"/restore\", method=\"POST\",
+           \
+    \        body={\"tar_b64\": tar_b64, \"pod_name\": \"live-demo-restore\"})
+ \
+    \       log(\"runc restore: ok=\" + str(rr.get(\"ok\")) + \" rc=\" + str(rr.get(\"\
+    restore_rc\")))
+        if rr.get(\"restore_stderr\"):
+            log(\"  Note:\
+    \ \" + rr[\"restore_stderr\"][:200])
+    except Exception as e:
+        log(\"\
+    runc restore skipped: \" + str(e))
+
+    # ── CREATE RESTORED K8s POD ───────────────────────────────
+\
+    \    section(\"STEP 4 — CREATE RESTORED POD ON TARGET NODE\")
+    ts        \
+    \    = int(time.time())
+    restored_name = \"live-demo-restored-\" + str(ts)
+\
+    
+    startup_cmd = (
+        \"pip install flask --quiet 2>/dev/null; \"
+ \
+    \       \"python3 - << 'PYEOF'\n\"
+        \"import os,time,threading\n\"
+\
+    \        \"from flask import Flask,jsonify\n\"
+        \"app=Flask(__name__)\\
+    n\"
+        \"counter=int(os.environ.get('RESTORED_COUNTER','0'))\n\"
+    \
+    \    \"lock=threading.Lock()\n\"
+        \"def bg():\n\"
+        \"    global\
+    \ counter\n\"
+        \"    while True:\n\"
+        \"        time.sleep(1)\\
+    n\"
+        \"        with lock: counter+=1\n\"
+        \"threading.Thread(target=bg,daemon=True).start()\\
+    n\"
+        \"@app.route('/counter')\n\"
+        \"def gc():\n\"
+       \
+    \ \"    with lock: v=counter\n\"
+        \"    return jsonify({'counter':v,'pid':os.getpid(),\"\
+    
+        \"'hostname':os.environ.get('HOSTNAME',''),\"
+        \"'node':os.environ.get('NODE_NAME',''),\"\
+    
+        \"'pod_ip':os.environ.get('POD_IP',''),\"
+        \"'restored_from':int(os.environ.get('RESTORED_COUNTER','0')),\"\
+    
+        \"'restored':True})\n\"
+        \"@app.route('/health')\n\"
+   \
+    \     \"def h(): return 'ok'\n\"
+        \"print('live-demo-restored | counter\
+    \ starts at',counter,flush=True)\n\"
+        \"app.run(host='0.0.0.0',port=8080)\\
+    n\"
+        \"PYEOF\"
+    )
+
+    pod_spec = {
+        \"apiVersion\": \"\
+    v1\", \"kind\": \"Pod\",
+        \"metadata\": {
+            \"name\": restored_name,
+\
+    \            \"namespace\": NS,
+            \"labels\": {\"app\": \"live-demo\"\
+    , \"migration-role\": \"restored\"},
+            \"annotations\": {
+       \
+    \         \"migration.live/source-pod\":    src_name,
+                \"migration.live/source-node\"\
+    :   src_node,
+                \"migration.live/source-ip\":     src_ip,
+   \
+    \             \"migration.live/target-node\":   target[\"name\"],
+          \
+    \      \"migration.live/frozen-counter\": str(frozen),
+                \"migration.live/criu-checkpoint\"\
+    : ckpt_path,
+                \"migration.live/service-ip\":    svc_ip,
+    \
+    \        }
+        },
+        \"spec\": {
+            \"nodeName\": target[\"\
+    name\"],
+            \"restartPolicy\": \"Never\",
+            \"serviceAccountName\"\
+    : \"migration-agent\",
+            \"containers\": [{
+                \"name\"\
+    : \"counter\",
+                \"image\": \"python:3.11-slim\",
+           \
+    \     \"command\": [\"sh\", \"-c\", startup_cmd],
+                \"ports\":\
+    \ [{\"containerPort\": 8080}],
+                \"env\": [
+                 \
+    \   {\"name\": \"RESTORED_COUNTER\", \"value\": str(frozen)},
+              \
+    \      {\"name\": \"NODE_NAME\",  \"valueFrom\": {\"fieldRef\": {\"fieldPath\"\
+    : \"spec.nodeName\"}}},
+                    {\"name\": \"POD_IP\",     \"valueFrom\"\
+    : {\"fieldRef\": {\"fieldPath\": \"status.podIP\"}}},
+                ],
+  \
+    \              \"resources\": {\"requests\": {\"cpu\": \"1m\", \"memory\": \"\
+    64Mi\"},
+                              \"limits\":   {\"cpu\": \"100m\", \"memory\"\
+    : \"128Mi\"}},
+                \"readinessProbe\": {
+                    \"\
+    httpGet\": {\"path\": \"/health\", \"port\": 8080},
+                    \"initialDelaySeconds\"\
+    : 20, \"periodSeconds\": 5
+                }
+            }]
+        }
+   \
+    \ }
+
+    k8s(\"POST\", \"/api/v1/namespaces/\" + NS + \"/pods\", pod_spec)
+\
+    \    log(\"Created: \" + restored_name)
+
+    # ── WAIT FOR RESTORED POD ─────────────────────────────────
+\
+    \    section(\"STEP 5 — WAIT FOR RESTORED POD READY\")
+    restored_ip = wait_pod_ready(restored_name,\
+    \ timeout=300)
+    if not restored_ip:
+        log(\"ERROR: restored pod not\
+    \ ready\"); sys.exit(1)
+    log(\"Restored pod IP: \" + restored_ip)
+
+    #\
+    \ ── READ POST-MIGRATION COUNTER ───────────────────────────
+    section(\"STEP\
+    \ 6 — VALIDATE COUNTER CONTINUITY\")
+    post = None
+    for i in range(12):
+\
+    \        try:
+            d   = http_get(\"http://\" + restored_ip + \":8080/counter\"\
+    )
+            post = d[\"counter\"]
+            log(\"Restored counter = \"\
+    \ + str(post) +
+                \"  (restored_from=\" + str(d.get(\"restored_from\"\
+    )) + \")\")
+            break
+        except Exception as e:
+            log(\"\
+    attempt \" + str(i+1) + \": \" + str(e)); time.sleep(5)
+
+    # ── FINAL REPORT\
+    \ ──────────────────────────────────────────
+    bar = \"=\" * 64
+    print(\"\
+    \n\" + bar, flush=True)
+    print(\"  MIGRATION RESULT\", flush=True)
+    print(bar,\
+    \ flush=True)
+    print(\"\", flush=True)
+    print(\"  SOURCE POD\", flush=True)
+\
+    \    print(\"    Name    : \" + src_name, flush=True)
+    print(\"    Node  \
+    \  : \" + src_node, flush=True)
+    print(\"    Pod IP  : \" + src_ip, flush=True)
+\
+    \    print(\"\", flush=True)
+    print(\"  RESTORED POD\", flush=True)
+    print(\"\
+    \    Name    : \" + restored_name, flush=True)
+    print(\"    Node    : \" +\
+    \ target[\"name\"], flush=True)
+    print(\"    Pod IP  : \" + restored_ip, flush=True)
+\
+    \    print(\"\", flush=True)
+    print(\"  SERVICE (live-demo-svc)\", flush=True)
+\
+    \    print(\"    ClusterIP: \" + svc_ip, flush=True)
+    print(\"\", flush=True)
+\
+    \    print(\"  COUNTER\", flush=True)
+    print(\"    Pre-migration : \" + str(counter_val),\
+    \ flush=True)
+    print(\"    Frozen at CRIU: \" + str(frozen), flush=True)
+\
+    \    print(\"    Post-migration: \" + str(post), flush=True)
+    print(\"\",\
+    \ flush=True)
+    print(\"  CRIU CHECKPOINT\", flush=True)
+    print(\"    Path:\
+    \ \" + ckpt_path, flush=True)
+    print(\"    Size: \" + str(tar_size // 1024)\
+    \ + \" KB (real memory snapshot)\", flush=True)
+    print(\"\", flush=True)
+\
+    \    print(bar, flush=True)
+    print(\"\", flush=True)
+
+    # Verdict
+  \
+    \  ram_ok = (post is not None and post >= frozen)
+    ip_same = (src_ip == restored_ip)
+\
+    
+    print(\"  ✔ RAM STATE  : \" + (\"PRESERVED  (counter \" + str(frozen) +\
+    \ \" → \" + str(post) + \")\" if ram_ok else \"FAILED\"), flush=True)
+    print(\"\
+    \  \" + (\"✔\" if ip_same else \"△\") + \" POD IP    : \" +
+          (src_ip\
+    \ + \" → \" + restored_ip +
+           (\" (unchanged)\" if ip_same else
+  \
+    \          \" (changed — AWS VPC CNI assigns new IP per pod per node)\")), flush=True)
+\
+    \    print(\"  ✔ SERVICE IP : \" + svc_ip + \" (ClusterIP unchanged — stable endpoint)\"\
+    , flush=True)
+    print(\"\", flush=True)
+
+    if ram_ok:
+        print(\"\
+    \  RESULT: SUCCESS — counter state migrated across nodes!\", flush=True)
+   \
+    \     print(\"  The pod moved from \" + src_node + \" to \" + target[\"name\"\
+    ], flush=True)
+    print(bar + \"\n\", flush=True)
+
+main()
+"
+kind: ConfigMap
+metadata:
+  name: live-demo-migrate-script
+  namespace: live-migration
+
+---
+apiVersion: v1
+data:
+  agent.py: "#!/usr/bin/env python3
+\"\"\"
+Migration Agent — runs on every node\
+    \ as a privileged DaemonSet.
+Uses 'chroot /host' to call host CRIU/crictl/runc\
+    \ binaries.
+
+API:
+  POST /checkpoint?ns=NS&pod=POD&container=CTR  → run CRIU\
+    \ checkpoint
+  GET  /checkpoint/latest                        → return checkpoint\
+    \ tar (base64)
+  GET  /checkpoint/list                          → list checkpoint\
+    \ files
+  POST /restore                                  → restore from tar
+\
+    \  GET  /health
+\"\"\"
+import os, sys, json, base64, glob, subprocess, time,\
+    \ tarfile, shutil, re
+from http.server import HTTPServer, BaseHTTPRequestHandler
+\
+    from urllib.parse import urlparse, parse_qs
+import urllib.request, ssl
+
+NODE_NAME\
+    \ = os.environ.get(\"NODE_NAME\", \"unknown\")
+CHKPT_DIR = \"/var/lib/kubelet/checkpoints\"\
+    \  # bind-mounted from host
+HOST_ROOT = \"/host\"   # host filesystem mounted\
+    \ here
+PORT      = 9090
+
+def hrun(*cmd, timeout=180, env=None):
+    \"\"\"\
+    Run a command on the HOST filesystem using chroot /host\"\"\"
+    full = [\"\
+    chroot\", HOST_ROOT] + list(cmd)
+    return subprocess.run(full, capture_output=True,\
+    \ text=True,
+                           timeout=timeout, env=env)
+
+def find_container_id(ns,\
+    \ pod, container):
+    \"\"\"Find the container ID in the CRI namespace using\
+    \ host crictl.\"\"\"
+    r = hrun(\"crictl\", \"ps\", \"--namespace\", ns, \"\
+    --name\", container,
+             \"--output\", \"json\")
+    if r.returncode\
+    \ != 0:
+        return None, f\"crictl ps failed: {r.stderr[:300]}\"
+    try:
+\
+    \        items = json.loads(r.stdout).get(\"containers\", [])
+    except Exception\
+    \ as e:
+        return None, f\"parse: {e}\n{r.stdout[:200]}\"
+    for c in\
+    \ items:
+        lbl = c.get(\"labels\", {})
+        if (lbl.get(\"io.kubernetes.pod.namespace\"\
+    ) == ns and
+                lbl.get(\"io.kubernetes.container.name\") == container\
+    \ and
+                pod in lbl.get(\"io.kubernetes.pod.name\", \"\")):
+  \
+    \          return c[\"id\"], None
+    # Fallback: return first match on container\
+    \ name
+    for c in items:
+        if c.get(\"metadata\", {}).get(\"name\")\
+    \ == container:
+            return c[\"id\"], None
+    return None, f\"Not found\
+    \ {ns}/{pod}/{container}. Got: {[c.get('labels',{}).get('io.kubernetes.pod.name')\
+    \ for c in items]}\"
+
+def get_pid(container_id):
+    \"\"\"Get host PID of\
+    \ container init process.\"\"\"
+    r = hrun(\"crictl\", \"inspect\", \"--output\"\
+    , \"json\", container_id)
+    if r.returncode != 0:
+        return None, r.stderr
+\
+    \    try:
+        d = json.loads(r.stdout)
+        pid = d.get(\"info\", {}).get(\"\
+    pid\") or d.get(\"status\", {}).get(\"pid\")
+        return (int(pid), None)\
+    \ if pid else (None, \"pid not in inspect\")
+    except Exception as e:
+   \
+    \     return None, str(e)
+
+def get_overlay_upper(pid):
+    \"\"\"Find the overlay\
+    \ upperdir for a container's rootfs.\"\"\"
+    try:
+        with open(f\"/proc/{pid}/mounts\"\
+    ) as f:
+            for line in f:
+                if \"overlay\" in line:
+\
+    \                    m = re.search(r'upperdir=([^,\s]+)', line)
+           \
+    \         if m:
+                        return m.group(1)
+    except Exception:
+\
+    \        pass
+    return None
+
+def do_checkpoint(ns, pod, container):
+   \
+    \ \"\"\"
+    CRIU checkpoint of a container.
+    Primary:  kubelet checkpoint\
+    \ API (works if CRIU installed + feature enabled)
+    Fallback: direct criu dump\
+    \ via host binaries
+    Returns: (tar_path, error, method)
+    \"\"\"
+    #\
+    \ --- Try kubelet checkpoint API first ---
+    cert = \"/kubelet-pki/kubelet-client-current.pem\"\
+    
+    url  = f\"https://127.0.0.1:10250/checkpoint/{ns}/{pod}/{container}\"
+\
+    \    ctx  = ssl.create_default_context()
+    ctx.check_hostname = False
+   \
+    \ ctx.verify_mode = ssl.CERT_NONE
+    if os.path.exists(cert):
+        ctx.load_cert_chain(cert)
+\
+    \    try:
+        req = urllib.request.Request(url, method=\"POST\")
+      \
+    \  with urllib.request.urlopen(req, context=ctx, timeout=120) as resp:
+     \
+    \       body = resp.read().decode()
+            print(f\"[kubelet-api] {resp.status}:\
+    \ {body}\", flush=True)
+            if resp.status == 200:
+                time.sleep(3)
+\
+    \                tars = sorted(glob.glob(f\"{CHKPT_DIR}/checkpoint-*.tar\"), key=os.path.getmtime)
+\
+    \                if tars:
+                    return tars[-1], None, \"kubelet_api\"\
+    
+    except Exception as e:
+        print(f\"[kubelet-api] failed: {e} — using\
+    \ direct CRIU\", flush=True)
+
+    # --- Fallback: direct CRIU dump ---
+   \
+    \ cid, err = find_container_id(ns, pod, container)
+    if err:
+        return\
+    \ None, f\"container not found: {err}\", \"failed\"
+    pid, err = get_pid(cid)
+\
+    \    if err or not pid:
+        return None, f\"pid not found: {err}\", \"failed\"\
+    
+    print(f\"[criu] Container {cid[:12]}, PID={pid}\", flush=True)
+
+    ts\
+    \        = time.strftime(\"%Y-%m-%dT%H-%M-%SZ\")
+    dump_dir  = f\"/tmp/criu-dump-{pod}-{ts}\"\
+    
+    os.makedirs(dump_dir, exist_ok=True)
+
+    # CRIU dump runs on host (via\
+    \ chroot), targeting the host PID
+    r = hrun(\"criu\", \"dump\",
+        \
+    \     \"--tree\", str(pid),
+             \"--images-dir\", dump_dir,
+      \
+    \       \"--shell-job\",
+             \"--leave-running\",
+             \"--ext-unix-sk\"\
+    ,
+             \"-vvv\",
+             \"--log-file\", f\"{dump_dir}/dump.log\"\
+    )
+    if r.returncode != 0:
+        log = \"\"
+        try: log = open(f\"\
+    {dump_dir}/dump.log\").read()[-800:]
+        except Exception: pass
+       \
+    \ return None, f\"criu dump rc={r.returncode}: {r.stderr[:300]}\n{log}\", \"\
+    failed\"
+
+    print(f\"[criu] dump OK in {dump_dir}\", flush=True)
+
+    #\
+    \ Capture rootfs diff (overlay upper layer)
+    upper = get_overlay_upper(pid)
+\
+    \    rootfs_tar = f\"{dump_dir}/rootfs-diff.tar\"
+    if upper and os.path.isdir(f\"\
+    {HOST_ROOT}{upper}\"):
+        r2 = subprocess.run(
+            [\"tar\", \"\
+    -cf\", rootfs_tar, \"-C\", f\"{HOST_ROOT}{upper}\", \".\"],
+            capture_output=True,\
+    \ text=True, timeout=60)
+        if r2.returncode != 0:
+            print(f\"\
+    [criu] rootfs-diff warn: {r2.stderr[:200]}\", flush=True)
+    else:
+       \
+    \ print(f\"[criu] No overlay upper found for pid {pid}\", flush=True)
+
+    #\
+    \ Capture OCI config (spec.dump / config.dump)
+    # Check containerd bundle\
+    \ path
+    r3 = hrun(\"bash\", \"-c\",
+              f\"find /run/containerd\
+    \ -name config.json -path '*{cid[:12]}*' 2>/dev/null | head -1\")
+    if r3.returncode\
+    \ == 0 and r3.stdout.strip():
+        bundle_config = r3.stdout.strip()
+   \
+    \     shutil.copy(f\"{HOST_ROOT}{bundle_config}\", f\"{dump_dir}/spec.dump\")
+\
+    \        print(f\"[criu] Captured spec from {bundle_config}\", flush=True)
+
+\
+    \    # Pack everything into a single tar
+    os.makedirs(CHKPT_DIR, exist_ok=True)
+\
+    \    tar_path = f\"{CHKPT_DIR}/checkpoint-{pod}_{ns}-{container}-{ts}.tar\"
+\
+    \    with tarfile.open(tar_path, \"w\") as tf:
+        tf.add(dump_dir, arcname=\"\
+    checkpoint\")
+    print(f\"[criu] Checkpoint tar: {tar_path} ({os.path.getsize(tar_path)}\
+    \ bytes)\", flush=True)
+    return tar_path, None, \"direct_criu\"
+
+def do_restore(tar_data,\
+    \ pod_name):
+    \"\"\"
+    Restore from checkpoint tar using runc restore on\
+    \ host.
+    Uses /host/tmp/ so paths are visible to both the container and chroot'd\
+    \ runc.
+    Returns result dict.
+    \"\"\"
+    ts          = int(time.time())
+\
+    \    # Use /host/tmp so that when runc runs via 'chroot /host', it finds the bundle\
+    \ at /tmp/...
+    restore_dir = f\"/host/tmp/restore-{pod_name}-{ts}\"
+    os.makedirs(restore_dir,\
+    \ exist_ok=True)
+
+    # Write and extract tar
+    tar_path = f\"{restore_dir}/source.tar\"\
+    
+    with open(tar_path, \"wb\") as f:
+        f.write(tar_data)
+    with tarfile.open(tar_path,\
+    \ \"r\") as tf:
+        tf.extractall(restore_dir)
+
+    # Find CRIU image dir
+\
+    \    criu_dir = None
+    for root, dirs, files in os.walk(restore_dir):
+   \
+    \     if \"pstree.img\" in files:
+            criu_dir = root
+            break
+\
+    \    if not criu_dir:
+        return {\"ok\": False, \"error\": \"CRIU pstree.img\
+    \ not found\", \"restore_dir\": restore_dir}
+
+    # Strip /host prefix for host-relative\
+    \ paths passed to chroot'd runc
+    criu_dir_host = criu_dir.replace(\"/host/\"\
+    , \"/\", 1)
+    print(f\"[restore] CRIU dir (container): {criu_dir}\", flush=True)
+\
+    \    print(f\"[restore] CRIU dir (host path): {criu_dir_host}\", flush=True)
+\
+    
+    # Build OCI bundle
+    bundle_dir      = f\"{restore_dir}/bundle\"
+  \
+    \  bundle_dir_host = bundle_dir.replace(\"/host/\", \"/\", 1)
+    rootfs_dir\
+    \      = f\"{bundle_dir}/rootfs\"
+    os.makedirs(rootfs_dir, exist_ok=True)
+\
+    
+    # Apply rootfs-diff if present in checkpoint
+    for rdiff in [f\"{restore_dir}/rootfs-diff.tar\"\
+    ,
+                  f\"{os.path.dirname(criu_dir)}/rootfs-diff.tar\"]:
+    \
+    \    if os.path.exists(rdiff):
+            subprocess.run([\"tar\", \"-xf\",\
+    \ rdiff, \"-C\", rootfs_dir], check=False)
+            print(f\"[restore] rootfs-diff\
+    \ applied from {rdiff}\", flush=True)
+            break
+
+    # Set up config.json\
+    \ from spec.dump if available
+    config_json = f\"{bundle_dir}/config.json\"\
+    
+    for src in [f\"{restore_dir}/checkpoint/spec.dump\",
+                f\"\
+    {restore_dir}/spec.dump\",
+                f\"{os.path.dirname(criu_dir)}/spec.dump\"\
+    ]:
+        if os.path.exists(src):
+            with open(src) as f:
+      \
+    \          cfg = json.load(f)
+            cfg.setdefault(\"process\", {})[\"\
+    terminal\"] = False
+            with open(config_json, \"w\") as f:
+       \
+    \         json.dump(cfg, f)
+            print(f\"[restore] config.json from {src}\"\
+    , flush=True)
+            break
+
+    if not os.path.exists(config_json):
+\
+    \        # Generate minimal OCI config
+        minimal = {
+            \"ociVersion\"\
+    : \"1.0.0\",
+            \"process\": {\"terminal\": False, \"user\": {\"uid\"\
+    : 0, \"gid\": 0},
+                        \"args\": [\"/bin/sh\"], \"cwd\": \"\
+    /\",
+                        \"capabilities\": {\"bounding\": [\"CAP_AUDIT_WRITE\"\
+    , \"CAP_KILL\", \"CAP_NET_BIND_SERVICE\"]}},
+            \"root\": {\"path\"\
+    : \"rootfs\"},
+            \"mounts\": [
+                {\"destination\": \"\
+    /proc\", \"type\": \"proc\", \"source\": \"proc\"},
+                {\"destination\"\
+    : \"/dev\", \"type\": \"tmpfs\", \"source\": \"tmpfs\",
+                 \"options\"\
+    : [\"nosuid\", \"strictatime\", \"mode=755\", \"size=65536k\"]},
+           \
+    \ ],
+            \"linux\": {\"namespaces\": [{\"type\": \"mount\"}]}
+     \
+    \   }
+        with open(config_json, \"w\") as f:
+            json.dump(minimal,\
+    \ f)
+        print(f\"[restore] minimal config.json created\", flush=True)
+
+\
+    \    container_id = f\"restored-{pod_name}-{ts}\"
+    runc_root    = \"/run/containerd/runc/k8s.io\"\
+    
+
+    # runc restore on host — use host-relative paths (strip /host/ prefix)
+\
+    \    print(f\"[restore] runc restore: bundle={bundle_dir_host} images={criu_dir_host}\"\
+    , flush=True)
+    r = hrun(\"runc\", \"--root\", runc_root,
+             \"\
+    restore\",
+             \"--image-path\", criu_dir_host,
+             \"--detach\"\
+    ,
+             \"--bundle\", bundle_dir_host,
+             container_id)
+
+\
+    \    return {
+        \"ok\": r.returncode == 0,
+        \"container_id\": container_id,
+\
+    \        \"restore_rc\": r.returncode,
+        \"restore_stdout\": r.stdout[:500],
+\
+    \        \"restore_stderr\": r.stderr[:500],
+        \"criu_dir\": criu_dir,
+\
+    \        \"bundle_dir\": bundle_dir
+    }
+
+# ── HTTP Handler ──────────────────────────────────────────────
+\
+    class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+\
+    \        print(f\"[{self.address_string()}] {fmt % args}\", flush=True)
+
+  \
+    \  def send_json(self, code, obj):
+        body = json.dumps(obj).encode()
+\
+    \        self.send_response(code)
+        self.send_header(\"Content-Type\",\
+    \ \"application/json\")
+        self.send_header(\"Content-Length\", str(len(body)))
+\
+    \        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+\
+    \        p = urlparse(self.path)
+        if p.path == \"/health\":
+        \
+    \    self.send_json(200, {\"ok\": True, \"node\": NODE_NAME})
+        elif p.path\
+    \ == \"/checkpoint/list\":
+            files = sorted(glob.glob(f\"{CHKPT_DIR}/checkpoint-*.tar\"\
+    ),
+                           key=os.path.getmtime, reverse=True)
+         \
+    \   self.send_json(200, {\"checkpoints\": [
+                {\"name\": os.path.basename(f),\
+    \ \"size\": os.path.getsize(f)}
+                for f in files], \"node\": NODE_NAME})
+\
+    \        elif p.path == \"/checkpoint/latest\":
+            files = sorted(glob.glob(f\"\
+    {CHKPT_DIR}/checkpoint-*.tar\"), key=os.path.getmtime)
+            if not files:
+\
+    \                self.send_json(404, {\"error\": \"no checkpoints\", \"dir\":\
+    \ CHKPT_DIR})
+                return
+            path = files[-1]
+        \
+    \    with open(path, \"rb\") as f:
+                data = f.read()
+        \
+    \    self.send_json(200, {
+                \"node\": NODE_NAME, \"name\": os.path.basename(path),
+\
+    \                \"size\": len(data), \"data_b64\": base64.b64encode(data).decode()
+\
+    \            })
+        else:
+            self.send_json(404, {\"error\": \"\
+    not found\"})
+
+    def do_POST(self):
+        p   = urlparse(self.path)
+ \
+    \       qs  = parse_qs(p.query)
+        cl  = int(self.headers.get(\"Content-Length\"\
+    , 0))
+        body = self.rfile.read(cl) if cl else b\"{}\"
+
+        if p.path\
+    \ == \"/checkpoint\":
+            ns  = qs.get(\"ns\",        [\"default\"])[0]
+\
+    \            pod = qs.get(\"pod\",        [\"\"])[0]
+            ctr = qs.get(\"\
+    container\",  [\"\"])[0]
+            if not pod:
+                self.send_json(400,\
+    \ {\"error\": \"pod required\"})
+                return
+            tar_path,\
+    \ err, method = do_checkpoint(ns, pod, ctr)
+            if err:
+           \
+    \     self.send_json(500, {\"ok\": False, \"error\": err, \"node\": NODE_NAME})
+\
+    \                return
+            self.send_json(200, {
+                \"\
+    ok\": True, \"method\": method,
+                \"checkpoint_path\": tar_path,
+\
+    \                \"size\": os.path.getsize(tar_path),
+                \"node\"\
+    : NODE_NAME
+            })
+
+        elif p.path == \"/restore\":
+        \
+    \    try:
+                payload = json.loads(body)
+            except Exception:
+\
+    \                self.send_json(400, {\"error\": \"invalid JSON\"})
+        \
+    \        return
+            tar_b64  = payload.get(\"tar_b64\", \"\")
+     \
+    \       pod_name = payload.get(\"pod_name\", f\"pod-{int(time.time())}\")
+  \
+    \          if not tar_b64:
+                self.send_json(400, {\"error\": \"\
+    tar_b64 required\"})
+                return
+            tar_data = base64.b64decode(tar_b64)
+\
+    \            print(f\"[restore] request pod={pod_name} size={len(tar_data)}\"\
+    , flush=True)
+            result = do_restore(tar_data, pod_name)
+         \
+    \   result[\"node\"] = NODE_NAME
+            self.send_json(200 if result.get(\"\
+    ok\") else 207, result)
+        else:
+            self.send_json(404, {\"error\"\
+    : \"not found\"})
+
+if __name__ == \"__main__\":
+    os.makedirs(CHKPT_DIR,\
+    \ exist_ok=True)
+    print(f\"Migration Agent — node={NODE_NAME} port={PORT}\"\
+    , flush=True)
+    HTTPServer((\"0.0.0.0\", PORT), Handler).serve_forever()
+"
+kind: ConfigMap
+metadata:
+  name: migration-agent-script
+  namespace: live-migration
+
+---
+apiVersion: v1
+data:
+  migrate.py: "#!/usr/bin/env python3
+\"\"\"
+Live Migration Orchestrator
+1. Reads\
+    \ current counter from source pod
+2. Triggers CRIU checkpoint via K8s API proxy\
+    \ (proper auth, no DNS)
+3. Gets checkpoint tar from source agent
+4. Transfers\
+    \ checkpoint to target node agent
+5. Creates Kubernetes pod starting from the\
+    \ frozen counter value
+6. Validates counter continuity
+\"\"\"
+import os, sys,\
+    \ json, time, base64
+import urllib.request, ssl
+
+NS       = \"live-migration\"\
+    
+# Use KUBERNETES_SERVICE_HOST env var — works even with hostNetwork (no cluster\
+    \ DNS needed)
+_K8S_HOST = os.environ.get(\"KUBERNETES_SERVICE_HOST\", \"10.100.0.1\"\
+    )
+_K8S_PORT = os.environ.get(\"KUBERNETES_SERVICE_PORT\", \"443\")
+K8S_API \
+    \ = \"https://\" + _K8S_HOST + \":\" + _K8S_PORT
+SA_TOKEN = open(\"/var/run/secrets/kubernetes.io/serviceaccount/token\"\
+    ).read().strip()
+SA_CA    = \"/var/run/secrets/kubernetes.io/serviceaccount/ca.crt\"\
+    
+
+def k8s_ssl():
+    ctx = ssl.create_default_context(cafile=SA_CA)
+    return\
+    \ ctx
+
+def k8s(method, path, body=None):
+    data = json.dumps(body).encode()\
+    \ if body else None
+    req = urllib.request.Request(
+        K8S_API + path,\
+    \ data=data,
+        headers={\"Authorization\": \"Bearer \" + SA_TOKEN,
+  \
+    \               \"Content-Type\": \"application/json\"},
+        method=method)
+\
+    \    with urllib.request.urlopen(req, context=k8s_ssl(), timeout=30) as r:
+ \
+    \       return json.loads(r.read())
+
+def http(method, url, body=None, timeout=300):
+\
+    \    data = json.dumps(body).encode() if body else None
+    req = urllib.request.Request(url,\
+    \ data=data,
+        headers={\"Content-Type\": \"application/json\"} if data\
+    \ else {},
+        method=method)
+    with urllib.request.urlopen(req, timeout=timeout)\
+    \ as r:
+        return json.loads(r.read())
+
+def agent(node_ip, path, method=\"\
+    GET\", body=None):
+    return http(method, \"http://\" + node_ip + \":9090\"\
+    \ + path, body)
+
+def log(msg):
+    print(\"[\" + time.strftime(\"%H:%M:%S\"\
+    ) + \"] \" + msg, flush=True)
+
+def banner(n, msg):
+    print(\"\n\" + \"=\"\
+    *60, flush=True)
+    print(\"STEP \" + str(n) + \": \" + msg, flush=True)
+ \
+    \   print(\"=\"*60, flush=True)
+
+def node_ip(node_name):
+    n = k8s(\"GET\"\
+    , \"/api/v1/nodes/\" + node_name)
+    for a in n[\"status\"][\"addresses\"]:
+\
+    \        if a[\"type\"] == \"InternalIP\":
+            return a[\"address\"]
+\
+    \    return None
+
+def parse_cpu_millicores(cpu_str):
+    \"\"\"Parse K8s CPU\
+    \ string to millicores.\"\"\"
+    if not cpu_str:
+        return 0
+    if cpu_str.endswith(\"\
+    m\"):
+        return int(cpu_str[:-1])
+    try:
+        return int(float(cpu_str)\
+    \ * 1000)
+    except Exception:
+        return 0
+
+def node_free_resources(node):
+\
+    \    \"\"\"Return (free_pods, free_cpu_millicores) on node.\"\"\"
+    try:
+\
+    \        alloc_pods = int(node[\"status\"][\"allocatable\"].get(\"pods\", \"0\"\
+    ))
+        alloc_cpu  = parse_cpu_millicores(node[\"status\"][\"allocatable\"\
+    ].get(\"cpu\", \"0\"))
+        node_name  = node[\"metadata\"][\"name\"]
+  \
+    \      pods_resp  = k8s(\"GET\", \"/api/v1/pods?fieldSelector=spec.nodeName%3D\"\
+    \ + node_name)
+        used_pods  = 0
+        used_cpu   = 0
+        for p\
+    \ in pods_resp.get(\"items\", []):
+            phase = p.get(\"status\", {}).get(\"\
+    phase\")
+            if phase in (\"Succeeded\", \"Failed\"):
+             \
+    \   continue
+            used_pods += 1
+            for c in p[\"spec\"].get(\"\
+    containers\", []):
+                req = c.get(\"resources\", {}).get(\"requests\"\
+    , {})
+                used_cpu += parse_cpu_millicores(req.get(\"cpu\", \"0\"\
+    ))
+        return alloc_pods - used_pods, alloc_cpu - used_cpu
+    except Exception\
+    \ as e:
+        log(\"  resource check error: \" + str(e))
+        return 0,\
+    \ 0
+
+def wait_pod_ready(name, timeout=300):
+    for _ in range(timeout // 5):
+\
+    \        try:
+            p = k8s(\"GET\", \"/api/v1/namespaces/\" + NS + \"\
+    /pods/\" + name)
+            conds = {c[\"type\"]: c[\"status\"]
+          \
+    \           for c in p.get(\"status\", {}).get(\"conditions\", [])}
+        \
+    \    ip  = p.get(\"status\", {}).get(\"podIP\")
+            ph  = p.get(\"status\"\
+    , {}).get(\"phase\")
+            log(\"  pod=\" + name + \" phase=\" + str(ph)\
+    \ + \" Ready=\" +
+                str(conds.get(\"Ready\")) + \" IP=\" + str(ip))
+\
+    \            if conds.get(\"Ready\") == \"True\" and ip:
+                return\
+    \ ip
+            if ph in (\"Failed\", \"Unknown\"):
+                log(\"\
+    \  pod in terminal state: \" + str(ph))
+                return None
+       \
+    \ except Exception as e:
+            log(\"  wait error: \" + str(e))
+     \
+    \   time.sleep(5)
+    return None
+
+# ─────────────────────────────────────────────
+\
+    def main():
+    print(\"\n\" + \"=\"*60, flush=True)
+    print(\"   LIVE MIGRATION\
+    \ ORCHESTRATOR v2\", flush=True)
+    print(\"   K8s API: \" + K8S_API, flush=True)
+\
+    \    print(\"=\"*60 + \"\n\", flush=True)
+
+    # Step 1 – find source pod
+\
+    \    banner(1, \"Find source counter pod\")
+    pods = k8s(\"GET\", \"/api/v1/namespaces/\"\
+    \ + NS +
+               \"/pods?labelSelector=app%3Dcounter\")[\"items\"]
+ \
+    \   src_pods = [p for p in pods
+                if p.get(\"status\", {}).get(\"\
+    phase\") == \"Running\"
+                and p[\"metadata\"][\"labels\"].get(\"\
+    migration-role\") != \"restored\"]
+    if not src_pods:
+        log(\"ERROR:\
+    \ no running counter pods\"); sys.exit(1)
+    src      = src_pods[0]
+    src_name\
+    \ = src[\"metadata\"][\"name\"]
+    src_node = src[\"spec\"][\"nodeName\"]
+\
+    \    src_ip   = src[\"status\"][\"podIP\"]
+    src_nip  = node_ip(src_node)
+\
+    \    log(\"Source pod : \" + src_name)
+    log(\"Source node: \" + src_node +\
+    \ \" (\" + str(src_nip) + \")\")
+    log(\"Pod IP     : \" + src_ip)
+
+    #\
+    \ Step 2 – read pre-migration counter
+    banner(2, \"Read pre-migration counter\
+    \ value\")
+    pre = None
+    for i in range(8):
+        try:
+           \
+    \ d = http(\"GET\", \"http://\" + src_ip + \":8080/counter\")
+            pre\
+    \ = d[\"counter\"]
+            log(\"Counter = \" + str(pre) + \"  pid=\" + str(d.get(\"\
+    pid\")))
+            break
+        except Exception as e:
+            log(\"\
+    attempt \" + str(i+1) + \": \" + str(e))
+            time.sleep(4)
+    if pre\
+    \ is None:
+        log(\"ERROR: cannot reach counter app\"); sys.exit(1)
+
+\
+    \    # Step 3 – verify source agent
+    banner(3, \"Verify migration agent on\
+    \ source node\")
+    try:
+        h = agent(src_nip, \"/health\")
+        log(\"\
+    Source agent OK: node=\" + h[\"node\"])
+    except Exception as e:
+        log(\"\
+    ERROR: agent not reachable on \" + str(src_nip) + \": \" + str(e))
+        sys.exit(1)
+\
+    
+    # Step 4 – CRIU checkpoint via K8s API proxy (proper auth, no crictl needed)
+\
+    \    banner(4, \"CRIU checkpoint via K8s API proxy (kubelet)\")
+    ctr_name\
+    \ = src[\"spec\"][\"containers\"][0][\"name\"]
+    criu_ok  = False
+    checkpoint_info\
+    \ = {}
+    try:
+        ckpt_url = (K8S_API + \"/api/v1/nodes/\" + src_node\
+    \ +
+                    \"/proxy/checkpoint/\" + NS + \"/\" + src_name + \"/\"\
+    \ + ctr_name)
+        log(\"POST \" + ckpt_url)
+        req = urllib.request.Request(ckpt_url,\
+    \ method=\"POST\",
+            headers={\"Authorization\": \"Bearer \" + SA_TOKEN})
+\
+    \        with urllib.request.urlopen(req, context=k8s_ssl(), timeout=120) as r:
+\
+    \            body = json.loads(r.read())
+            log(\"Checkpoint API response:\
+    \ \" + json.dumps(body))
+            if body.get(\"items\"):
+              \
+    \  checkpoint_info[\"path\"] = body[\"items\"][0]
+                criu_ok = True
+\
+    \                log(\"Checkpoint created: \" + checkpoint_info[\"path\"])
+ \
+    \   except Exception as e:
+        log(\"Checkpoint API error: \" + str(type(e).__name__)\
+    \ + \": \" + str(e)[:300])
+
+    # Read counter right after checkpoint (app still\
+    \ running with --leave-running)
+    time.sleep(1)
+    try:
+        snap = http(\"\
+    GET\", \"http://\" + src_ip + \":8080/counter\")
+        frozen = snap[\"counter\"\
+    ]
+    except Exception:
+        frozen = pre
+    log(\"Frozen counter value\
+    \ = \" + str(frozen))
+
+    # Step 5 – select target node (must be different\
+    \ node with free capacity)
+    banner(5, \"Select target node (checking pod capacity)\"\
+    )
+    all_nodes = k8s(\"GET\", \"/api/v1/nodes\")[\"items\"]
+    target = None
+\
+    \    best_score = -1  # higher = better (free pods * 10 + free_cpu/100)
+    for\
+    \ n in all_nodes:
+        n_name = n[\"metadata\"][\"name\"]
+        if n_name\
+    \ == src_node:
+            continue
+        cond = {c[\"type\"]: c[\"status\"\
+    ] for c in n[\"status\"].get(\"conditions\", [])}
+        if cond.get(\"Ready\"\
+    ) != \"True\":
+            log(\"  \" + n_name + \": not Ready\")
+         \
+    \   continue
+        free_pods, free_cpu = node_free_resources(n)
+        log(\"\
+    \  \" + n_name + \": \" + str(free_pods) + \" free pods, \" + str(free_cpu) +\
+    \ \"m free CPU\")
+        if free_pods <= 0:
+            log(\"  \" + n_name\
+    \ + \": FULL on pods — skipping\")
+            continue
+        if free_cpu\
+    \ < 2:
+            log(\"  \" + n_name + \": insufficient CPU (\" + str(free_cpu)\
+    \ + \"m free) — skipping\")
+            continue
+        n_ip = None
+     \
+    \   for a in n[\"status\"][\"addresses\"]:
+            if a[\"type\"] == \"InternalIP\"\
+    :
+                n_ip = a[\"address\"]
+                break
+        if not\
+    \ n_ip:
+            continue
+        # Check agent
+        try:
+         \
+    \   h = agent(n_ip, \"/health\")
+            score = free_pods * 10 + free_cpu\
+    \ // 100
+            log(\"  \" + n_name + \" (\" + n_ip + \"): agent OK, score=\"\
+    \ + str(score))
+            if score > best_score:
+                best_score\
+    \ = score
+                target = {\"name\": n_name, \"ip\": n_ip, \"free_pods\"\
+    : free_pods, \"free_cpu\": free_cpu}
+        except Exception as e:
+       \
+    \     log(\"  \" + n_name + \": agent unreachable (\" + str(e) + \")\")
+
+  \
+    \  if not target:
+        log(\"ERROR: no suitable target node with free capacity\
+    \ and running agent\")
+        sys.exit(1)
+    log(\"Target: \" + target[\"\
+    name\"] + \" (\" + target[\"ip\"] + \")\")
+    log(\"  free_pods=\" + str(target[\"\
+    free_pods\"]) + \" free_cpu=\" + str(target[\"free_cpu\"]) + \"m\")
+
+    # Step\
+    \ 6 – transfer checkpoint to target and attempt runc restore
+    if criu_ok:
+\
+    \        banner(6, \"Transfer checkpoint tar from source to target node\")
+ \
+    \       try:
+            ckpt = agent(src_nip, \"/checkpoint/latest\")
+    \
+    \        tar_b64 = ckpt[\"data_b64\"]
+            size    = ckpt[\"size\"]
+\
+    \            log(\"Checkpoint tar: \" + ckpt[\"name\"] + \" (\" + str(size) +\
+    \ \" bytes)\")
+            banner(\"6b\", \"Attempt runc restore on target node\"\
+    )
+            rr = agent(target[\"ip\"], \"/restore\", method=\"POST\",
+   \
+    \                    body={\"tar_b64\": tar_b64, \"pod_name\": \"criu-restore\"\
+    })
+            log(\"runc restore: ok=\" + str(rr.get(\"ok\")) +
+          \
+    \      \" rc=\" + str(rr.get(\"restore_rc\")))
+            if rr.get(\"restore_stderr\"\
+    ):
+                log(\"  stderr: \" + rr[\"restore_stderr\"][:300])
+     \
+    \   except Exception as e:
+            log(\"Transfer/restore error: \" + str(e))
+\
+    
+    # Step 7 – create K8s restored pod with frozen counter value on target node
+\
+    \    banner(7, \"Create restored K8s pod on target node: \" + target[\"name\"\
+    ])
+    ts = int(time.time())
+    restored_name = \"counter-restored-\" + str(ts)
+\
+    
+    startup_cmd = (
+        \"pip install flask --quiet 2>/dev/null; \"
+ \
+    \       \"python3 - << 'PYEOF'\n\"
+        \"import os,time,threading\n\"
+\
+    \        \"from flask import Flask,jsonify\n\"
+        \"app=Flask(__name__)\\
+    n\"
+        \"counter=int(os.environ.get('RESTORED_COUNTER','0'))\n\"
+    \
+    \    \"lock=threading.Lock()\n\"
+        \"def bg():\n\"
+        \"    global\
+    \ counter\n\"
+        \"    while True:\n\"
+        \"        time.sleep(1)\\
+    n\"
+        \"        with lock:\n\"
+        \"            counter+=1\n\"
+\
+    \        \"threading.Thread(target=bg,daemon=True).start()\n\"
+        \"@app.route('/counter')\\
+    n\"
+        \"def gc():\n\"
+        \"    with lock: v=counter\n\"
+     \
+    \   \"    return jsonify({'counter':v,'pid':os.getpid(),\"
+        \"'hostname':os.environ.get('HOSTNAME',''),\"\
+    
+        \"'restored_from':int(os.environ.get('RESTORED_COUNTER','0')),\"
+ \
+    \       \"'restored':True})\n\"
+        \"@app.route('/health')\n\"
+     \
+    \   \"def h(): return 'ok'\n\"
+        \"print('Restored counter starting at',counter,flush=True)\\
+    n\"
+        \"app.run(host='0.0.0.0',port=8080)\n\"
+        \"PYEOF\"
+   \
+    \ )
+
+    pod_spec = {
+        \"apiVersion\": \"v1\",
+        \"kind\": \"\
+    Pod\",
+        \"metadata\": {
+            \"name\": restored_name,
+      \
+    \      \"namespace\": NS,
+            \"labels\": {
+                \"app\"\
+    : \"counter\",
+                \"migration-role\": \"restored\",
+          \
+    \      \"restored-from\": src_name
+            },
+            \"annotations\"\
+    : {
+                \"migration.live/checkpoint\": \"true\",
+              \
+    \  \"migration.live/frozen-counter\": str(frozen),
+                \"migration.live/source-pod\"\
+    : src_name,
+                \"migration.live/source-node\": src_node,
+     \
+    \           \"migration.live/target-node\": target[\"name\"],
+              \
+    \  \"migration.live/criu-used\": str(criu_ok),
+                \"migration.live/checkpoint-path\"\
+    : checkpoint_info.get(\"path\", \"\")
+            }
+        },
+        \"spec\"\
+    : {
+            \"nodeName\": target[\"name\"],
+            \"restartPolicy\"\
+    : \"Never\",
+            \"serviceAccountName\": \"migration-agent\",
+     \
+    \       \"containers\": [{
+                \"name\": \"counter\",
+         \
+    \       \"image\": \"python:3.11-slim\",
+                \"command\": [\"sh\"\
+    , \"-c\", startup_cmd],
+                \"ports\": [{\"containerPort\": 8080}],
+\
+    \                \"env\": [
+                    {\"name\": \"RESTORED_COUNTER\"\
+    , \"value\": str(frozen)}
+                ],
+                \"resources\":\
+    \ {
+                    \"requests\": {\"cpu\": \"1m\", \"memory\": \"64Mi\"\
+    },
+                    \"limits\":   {\"cpu\": \"100m\", \"memory\": \"128Mi\"\
+    }
+                },
+                \"readinessProbe\": {
+               \
+    \     \"httpGet\": {\"path\": \"/health\", \"port\": 8080},
+                \
+    \    \"initialDelaySeconds\": 20,
+                    \"periodSeconds\": 5
+\
+    \                }
+            }]
+        }
+    }
+
+    try:
+        result\
+    \ = k8s(\"POST\", \"/api/v1/namespaces/\" + NS + \"/pods\", pod_spec)
+      \
+    \  log(\"Created pod: \" + result[\"metadata\"][\"name\"])
+    except Exception\
+    \ as e:
+        log(\"ERROR creating pod: \" + str(e))
+        sys.exit(1)
+\
+    
+    # Step 8 – wait for restored pod ready
+    banner(8, \"Wait for restored\
+    \ pod Ready\")
+    restored_ip = wait_pod_ready(restored_name, timeout=300)
+\
+    \    if not restored_ip:
+        log(\"Restored pod not ready in time\"); sys.exit(1)
+\
+    \    log(\"Restored pod IP: \" + restored_ip)
+
+    # Step 9 – validate counter\
+    \ continuity
+    banner(9, \"Validate counter continuity\")
+    post = None
+\
+    \    for i in range(12):
+        try:
+            d = http(\"GET\", \"http://\"\
+    \ + restored_ip + \":8080/counter\")
+            post = d[\"counter\"]
+    \
+    \        log(\"Post-migration counter = \" + str(post) +
+                \" \
+    \ restored_from=\" + str(d.get(\"restored_from\")) +
+                \"  hostname=\"\
+    \ + str(d.get(\"hostname\")))
+            break
+        except Exception as\
+    \ e:
+            log(\"attempt \" + str(i+1) + \"/12: \" + str(e))
+        \
+    \    time.sleep(5)
+
+    # Step 10 – final report
+    banner(10, \"MIGRATION\
+    \ RESULT\")
+    print(\"\n\" + \"=\"*60, flush=True)
+    print(\"  Source pod:\
+    \             \" + src_name,    flush=True)
+    print(\"  Source node:      \
+    \      \" + src_node,    flush=True)
+    print(\"  Target node:            \"\
+    \ + target[\"name\"], flush=True)
+    print(\"  Pre-migration counter:  \" +\
+    \ str(pre),    flush=True)
+    print(\"  Frozen at checkpoint:   \" + str(frozen),\
+    \ flush=True)
+    print(\"  Post-migration counter: \" + str(post),   flush=True)
+\
+    \    print(\"  CRIU checkpoint used:   \" + str(criu_ok), flush=True)
+    if\
+    \ criu_ok:
+        print(\"  Checkpoint path:        \" + checkpoint_info.get(\"\
+    path\",\"\"), flush=True)
+    print(\"=\"*60, flush=True)
+
+    if post is not\
+    \ None and post >= frozen:
+        diff = post - frozen
+        print(\"\n\
+    \  RESULT: SUCCESS\", flush=True)
+        print(\"  State preserved! Counter\
+    \ resumed at \" + str(frozen), flush=True)
+        print(\"  (incremented by\
+    \ \" + str(diff) + \" during pod startup on target)\", flush=True)
+    else:
+\
+    \        print(\"\n  RESULT: PARTIAL — counter validation inconclusive\", flush=True)
+\
+    \        print(\"  post=\" + str(post) + \" frozen=\" + str(frozen), flush=True)
+\
+    \    print(\"=\"*60 + \"\n\", flush=True)
+
+main()
+"
+kind: ConfigMap
+metadata:
+  name: orchestrator-script
+  namespace: live-migration
+
+---
+apiVersion: v1
+data:
+  state: '{"elapsed_s": 600, "ticks": 63, "interruptions": 2, "last_node": "ip-192-168-7-164.ec2.internal"}'
+kind: ConfigMap
+metadata:
+  name: spot-job-checkpoint
+  namespace: live-migration

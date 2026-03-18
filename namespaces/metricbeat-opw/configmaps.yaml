@@ -1,0 +1,307 @@
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: metricbeat-opw
+
+---
+apiVersion: v1
+data:
+  metricbeat.yml: "metricbeat.modules:
+  - module: system
+    metricsets: [cpu]
+\
+    \    period: 10s
+    cpu.metrics: [percentages, normalized_percentages]
+
+ \
+    \ - module: system
+    metricsets: [memory]
+    period: 10s
+
+  - module: system
+\
+    \    metricsets: [load]
+    period: 10s
+
+  - module: system
+    metricsets:\
+    \ [network]
+    period: 10s
+    network.interfaces: []
+
+processors:
+  - add_host_metadata:
+\
+    \      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+
+output.logstash:
+\
+    \  hosts: [\"vector.metricbeat-opw.svc.cluster.local:5044\"]
+  loadbalance: false
+\
+    \  bulk_max_size: 2048
+  timeout: 30
+
+logging.level: info
+"
+kind: ConfigMap
+metadata:
+  name: metricbeat-config
+  namespace: metricbeat-opw
+
+---
+apiVersion: v1
+data:
+  vector.yaml: "api:
+  enabled: true
+  address: \"0.0.0.0:8686\"
+
+sources:
+ \
+    \ metricbeat_in:
+    type: logstash
+    address: \"0.0.0.0:5044\"
+    acknowledgements:
+\
+    \      enabled: true
+
+transforms:
+  # ── Step 1: normalize fields from Metricbeat\
+    \ event ─────────────────────
+  normalize:
+    type: remap
+    inputs: [metricbeat_in]
+\
+    \    source: |
+      .metric_host = string(.host.name) ?? \"unknown\"
+
+   \
+    \   if exists(.system.cpu.total.pct) {
+        .metric_cpu_total_pct = to_float!(.system.cpu.total.pct)
+\
+    \      }
+
+      if exists(.system.memory.used.pct) {
+        .metric_memory_used_pct\
+    \ = to_float!(.system.memory.used.pct)
+      }
+
+      _load1 = get(., [\"system\"\
+    , \"load\", \"1\"]) ?? null
+      if !is_null(_load1) {
+        .metric_load_1\
+    \ = to_float!(_load1)
+      }
+
+      if exists(.system.network.in.bytes) {
+\
+    \        .metric_network_in_bytes = to_float!(.system.network.in.bytes)
+    \
+    \  }
+
+      if exists(.system.network.out.bytes) {
+        .metric_network_out_bytes\
+    \ = to_float!(.system.network.out.bytes)
+      }
+
+  # ── Step 2: per-metric\
+    \ filters (avoids \"field does not exist\" errors) ──
+  filter_cpu:
+    type:\
+    \ filter
+    inputs: [normalize]
+    condition: \"exists(.metric_cpu_total_pct)\"\
+    
+
+  filter_memory:
+    type: filter
+    inputs: [normalize]
+    condition:\
+    \ \"exists(.metric_memory_used_pct)\"
+
+  filter_load:
+    type: filter
+  \
+    \  inputs: [normalize]
+    condition: \"exists(.metric_load_1)\"
+
+  filter_net_in:
+\
+    \    type: filter
+    inputs: [normalize]
+    condition: \"exists(.metric_network_in_bytes)\"\
+    
+
+  filter_net_out:
+    type: filter
+    inputs: [normalize]
+    condition:\
+    \ \"exists(.metric_network_out_bytes)\"
+
+  # ── Step 3: log_to_metric — one\
+    \ transform per metric ───────────────────
+  to_dd_cpu:
+    type: log_to_metric
+\
+    \    inputs: [filter_cpu]
+    metrics:
+      - field: metric_cpu_total_pct
+\
+    \        name: system.cpu.total.pct
+        namespace: metricbeat
+        type:\
+    \ gauge
+        tags:
+          host: \"{{metric_host}}\"
+
+  to_dd_memory:
+\
+    \    type: log_to_metric
+    inputs: [filter_memory]
+    metrics:
+      - field:\
+    \ metric_memory_used_pct
+        name: system.memory.used.pct
+        namespace:\
+    \ metricbeat
+        type: gauge
+        tags:
+          host: \"{{metric_host}}\"\
+    
+
+  to_dd_load:
+    type: log_to_metric
+    inputs: [filter_load]
+    metrics:
+\
+    \      - field: metric_load_1
+        name: system.load.1
+        namespace:\
+    \ metricbeat
+        type: gauge
+        tags:
+          host: \"{{metric_host}}\"\
+    
+
+  to_dd_net_in:
+    type: log_to_metric
+    inputs: [filter_net_in]
+  \
+    \  metrics:
+      - field: metric_network_in_bytes
+        name: system.network.in.bytes
+\
+    \        namespace: metricbeat
+        type: gauge
+        tags:
+         \
+    \ host: \"{{metric_host}}\"
+
+  to_dd_net_out:
+    type: log_to_metric
+   \
+    \ inputs: [filter_net_out]
+    metrics:
+      - field: metric_network_out_bytes
+\
+    \        name: system.network.out.bytes
+        namespace: metricbeat
+     \
+    \   type: gauge
+        tags:
+          host: \"{{metric_host}}\"
+
+sinks:
+\
+    \  # ── Elasticsearch: raw Metricbeat events (Kibana dashboards) ──────────
+\
+    \  elasticsearch_out:
+    type: elasticsearch
+    inputs: [normalize]
+    endpoints:
+\
+    \      - \"${ELASTICSEARCH_URL}\"
+    mode: bulk
+    bulk:
+      index: \"\
+    metricbeat\"
+    encoding:
+      except_fields:
+        - metric_cpu_total_pct
+\
+    \        - metric_memory_used_pct
+        - metric_load_1
+        - metric_network_in_bytes
+\
+    \        - metric_network_out_bytes
+        - metric_host
+    healthcheck:
+\
+    \      enabled: true
+
+  # ── Datadog: gauge metrics ─────────────────────────────────────────────
+\
+    \  datadog_metrics_out:
+    type: datadog_metrics
+    inputs:
+      - to_dd_cpu
+\
+    \      - to_dd_memory
+      - to_dd_load
+      - to_dd_net_in
+      - to_dd_net_out
+\
+    \    default_api_key: \"${DD_API_KEY}\"
+    site: \"datadoghq.com\"
+    batch:
+\
+    \      max_events: 100
+      timeout_secs: 5
+"
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: metricbeat-opw

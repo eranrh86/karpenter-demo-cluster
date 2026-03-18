@@ -1,0 +1,30 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: yes001
+  name: yes001
+  namespace: yes001
+spec:
+  allocateLoadBalancerNodePorts: true
+  clusterIP: 10.100.215.43
+  clusterIPs:
+  - 10.100.215.43
+  externalTrafficPolicy: Cluster
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  loadBalancerSourceRanges:
+  - 87.71.217.38/32
+  ports:
+  - name: http
+    nodePort: 30412
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: yes001
+  sessionAffinity: None
+  type: LoadBalancer

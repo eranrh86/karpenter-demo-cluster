@@ -1,0 +1,226 @@
+---
+apiVersion: v1
+data:
+  index.js: "const express = require('express');
+const Redis = require('ioredis');
+\
+    const app = express();
+app.use(express.json());
+const log = (o) => console.log(JSON.stringify(Object.assign({\
+    \ tier: 'backend', source: 'hebrew-backend' }, o)));
+const REDIS_HOST = process.env.REDIS_HOST\
+    \ || 'redis';
+const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
+\
+    const redis = new Redis(REDIS_PORT, REDIS_HOST);
+redis.on('connect', () => {\
+    \ log({ message: 'חיבור ל-Redis הצליח – שכבת מסד הנתונים מוכנה', event: 'redis_connected'\
+    \ }); });
+redis.on('error', (err) => { console.error(JSON.stringify({ tier: 'backend',\
+    \ event: 'redis_error', error: err.message })); });
+app.use((req, res, next)\
+    \ => { log({ message: 'בקשת ' + req.method + ' התקבלה', path: req.path, event:\
+    \ 'request' }); next(); });
+app.get('/api/health', (req, res) => { log({ message:\
+    \ 'בדיקת בריאות – השרת פעיל', event: 'health' }); res.json({ status: 'ok', message:\
+    \ 'המערכת פועלת' }); });
+app.get('/api/data', async (req, res) => {
+  try {
+\
+    \    const keys = await redis.keys('*');
+    const data = {};
+    for (const\
+    \ k of keys) { data[k] = await redis.get(k); }
+    log({ message: 'נתונים נשלפו\
+    \ בהצלחה ממסד הנתונים', event: 'data_fetched' });
+    res.json({ data });
+ \
+    \ } catch (e) { console.error(JSON.stringify({ tier: 'backend', event: 'error',\
+    \ error: e.message })); res.status(500).json({ error: 'שגיאה בשרת' }); }
+});
+\
+    app.post('/api/data', async (req, res) => {
+  const { key, value } = req.body\
+    \ || {};
+  if (!key) { log({ message: 'בקשה לא תקינה – חסר מפתח', event: 'validation_error'\
+    \ }); return res.status(400).json({ error: 'נדרש מפתח' }); }
+  try {
+    await\
+    \ redis.set(key, value || '');
+    log({ message: 'נתון נשמר בהצלחה במסד הנתונים',\
+    \ key, event: 'data_saved' });
+    res.json({ saved: key });
+  } catch (e) {\
+    \ console.error(JSON.stringify({ tier: 'backend', event: 'error', error: e.message\
+    \ })); res.status(500).json({ error: 'שגיאה בשרת' }); }
+});
+const PORT = process.env.PORT\
+    \ || 3000;
+app.listen(PORT, () => { log({ message: 'שרת ה-Backend מאזין על פורט\
+    \ ' + PORT, event: 'listening', port: PORT }); });
+"
+  package.json: '{"name":"hebrew-backend","version":"1.0.0","main":"index.js","dependencies":{"express":"^4.18.2","ioredis":"^5.3.2"}}
+
+    '
+kind: ConfigMap
+metadata:
+  name: hebrew-backend-code
+  namespace: hebrew-app
+
+---
+apiVersion: v1
+data:
+  index.js: "const express = require('express');
+const axios = require('axios');
+\
+    const path = require('path');
+const app = express();
+const BACKEND_URL = process.env.BACKEND_URL\
+    \ || 'http://backend:3000';
+const log = (o) => console.log(JSON.stringify(Object.assign({\
+    \ tier: 'frontend', source: 'hebrew-frontend' }, o)));
+app.use(express.static(path.join(__dirname,\
+    \ 'public')));
+app.use(express.json());
+app.use((req, res, next) => { log({\
+    \ message: 'בקשת משתמש התקבלה', method: req.method, url: req.url, event: 'request'\
+    \ }); next(); });
+app.get('/api/health', (req, res) => { log({ message: 'בדיקת\
+    \ בריאות Frontend – הכל תקין', event: 'health' }); res.json({ status: 'ok', tier:\
+    \ 'frontend', message: 'ממשק המשתמש פועל' }); });
+app.get('/api/proxy/data',\
+    \ async (req, res) => {
+  try {
+    const r = await axios.get(BACKEND_URL +\
+    \ '/api/data', { timeout: 5000 });
+    log({ message: 'נתונים הוחזרו מהבקאנד\
+    \ למשתמש', event: 'proxy_data' });
+    res.json(r.data);
+  } catch (e) { console.error(JSON.stringify({\
+    \ tier: 'frontend', event: 'error', error: e.message })); res.status(502).json({\
+    \ error: 'לא ניתן להשיג נתונים מהשרת' }); }
+});
+app.post('/api/proxy/data',\
+    \ async (req, res) => {
+  try {
+    const r = await axios.post(BACKEND_URL +\
+    \ '/api/data', req.body, { timeout: 5000 });
+    log({ message: 'נתון נשלח ונשמר\
+    \ דרך הבקאנד', event: 'proxy_save' });
+    res.json(r.data);
+  } catch (e) {\
+    \ console.error(JSON.stringify({ tier: 'frontend', event: 'error', error: e.message\
+    \ })); res.status(502).json({ error: 'שגיאה בשמירת נתונים' }); }
+});
+const PORT\
+    \ = process.env.PORT || 8080;
+app.listen(PORT, () => { log({ message: 'שרת ה-Frontend\
+    \ מאזין על פורט ' + PORT, event: 'listening', port: PORT }); });
+"
+  package.json: '{"name":"hebrew-frontend","version":"1.0.0","main":"index.js","dependencies":{"express":"^4.18.2","axios":"^1.6.2"}}
+
+    '
+  public_index.html: "<!DOCTYPE html>
+<html lang=\"he\" dir=\"rtl\">
+<head>
+  <meta\
+    \ charset=\"UTF-8\">
+  <meta name=\"viewport\" content=\"width=device-width,\
+    \ initial-scale=1.0\">
+  <title>אפליקציית Hebrew – 3 שכבות</title>
+  <style>
+\
+    \    body { font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 600px; margin:\
+    \ 2rem auto; padding: 1rem; }
+    h1 { color: #0d47a1; }
+    .tier { background:\
+    \ #e3f2fd; padding: 0.75rem; margin: 0.5rem 0; border-radius: 8px; }
+    button\
+    \ { background: #1976d2; color: white; border: none; padding: 0.5rem 1rem; border-radius:\
+    \ 6px; cursor: pointer; }
+    button:hover { background: #1565c0; }
+    pre\
+    \ { background: #f5f5f5; padding: 1rem; overflow-x: auto; }
+  </style>
+</head>
+\
+    <body>
+  <h1>אפליקציית Hebrew</h1>
+  <p>שלוש שכבות: Frontend ← Backend ← DB\
+    \ (Redis)</p>
+  <div class=\"tier\">
+    <strong>נתונים מהמערכת:</strong>
+\
+    \    <pre id=\"data\">טוען...</pre>
+    <button onclick=\"load()\">רענן נתונים</button>
+\
+    \  </div>
+  <script>
+    async function load() {
+      const el = document.getElementById('data');
+\
+    \      try {
+        const r = await fetch('/api/proxy/data');
+        const\
+    \ j = await r.json();
+        el.textContent = JSON.stringify(j, null, 2);
+\
+    \      } catch (e) { el.textContent = 'שגיאה: ' + e.message; }
+    }
+    load();
+\
+    \  </script>
+</body>
+</html>
+"
+kind: ConfigMap
+metadata:
+  name: hebrew-frontend-code
+  namespace: hebrew-app
+
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: hebrew-app

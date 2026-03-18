@@ -1,0 +1,1294 @@
+---
+apiVersion: v1
+data:
+  alertmanager.yml: "global:
+  resolve_timeout: 5m
+route:
+  group_by: ['alertname',\
+    \ 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval:\
+    \ 12h
+  receiver: 'oncall-webhook'
+receivers:
+- name: 'oncall-webhook'
+  webhook_configs:
+\
+    \  - url: 'http://oncall-webhook.monitoring.svc.cluster.local:9099/webhook'
+\
+    \    send_resolved: true
+"
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  webhook.py: "from flask import Flask, request, jsonify
+import os
+import requests
+\
+    import json
+
+app = Flask(__name__)
+DD_API_KEY = os.environ.get(\"DD_API_KEY\"\
+    , \"test-key\")
+
+@app.route(\"/webhook\", methods=[\"POST\"])
+def webhook():
+\
+    \    data = request.json
+    alerts = data.get(\"alerts\", [])
+    print(f\"\
+    Received {len(alerts)} alerts\")
+    
+    for alert in alerts:
+        labels\
+    \ = alert.get(\"labels\", {})
+        annotations = alert.get(\"annotations\"\
+    , {})
+        status = alert.get(\"status\", \"firing\")
+        alertname =\
+    \ labels.get(\"alertname\")
+        severity = labels.get(\"severity\")
+   \
+    \     summary = annotations.get(\"summary\")
+        
+        print(f\"Alert:\
+    \ {alertname} - {status} - {severity}\")
+        print(f\"  Summary: {summary}\"\
+    )
+        
+        # Send to Datadog Events API
+        event = {
+       \
+    \     \"title\": f\"Prometheus: {alertname}\",
+            \"text\": annotations.get(\"\
+    description\", summary or \"\"),
+            \"alert_type\": \"error\" if severity\
+    \ == \"critical\" else \"warning\",
+            \"source_type_name\": \"prometheus\"\
+    ,
+            \"tags\": [f\"{k}:{v}\" for k,v in labels.items() if k and v]
+\
+    \        }
+        
+        try:
+            resp = requests.post(
+      \
+    \          \"https://api.datadoghq.com/api/v1/events\",
+                json=event,
+\
+    \                headers={\"DD-API-KEY\": DD_API_KEY, \"Content-Type\": \"application/json\"\
+    },
+                timeout=5
+            )
+            print(f\"  Sent to Datadog:\
+    \ {resp.status_code}\")
+        except Exception as e:
+            print(f\"\
+    \  Error: {e}\")
+    
+    return jsonify({\"status\": \"ok\", \"received\":\
+    \ len(alerts)}), 200
+
+@app.route(\"/health\", methods=[\"GET\"])
+def health():
+\
+    \    return jsonify({\"status\": \"healthy\"}), 200
+
+if __name__ == \"__main__\"\
+    :
+    print(f\"Starting webhook (API key: {DD_API_KEY[:10]}...)\")
+    app.run(host=\"\
+    0.0.0.0\", port=8080)
+"
+kind: ConfigMap
+metadata:
+  name: datadog-webhook-script
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  index.html: "<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"UTF-8\"\
+    >
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"\
+    >
+  <title>Demo – Fire Alert</title>
+  <style>
+    * { box-sizing: border-box;\
+    \ }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe\
+    \ UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: #1a1a2e;
+     \
+    \ color: #e6e6e6;
+      min-height: 100vh;
+      margin: 0;
+      display:\
+    \ flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content:\
+    \ center;
+      padding: 2rem;
+    }
+    .card {
+      background: #16213e;
+\
+    \      border: 1px solid #0f3460;
+      border-radius: 12px;
+      padding:\
+    \ 2.5rem;
+      max-width: 480px;
+      text-align: center;
+    }
+    h1 {
+\
+    \      margin: 0 0 0.5rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+\
+    \    }
+    .sub {
+      color: #8899a6;
+      font-size: 0.95rem;
+      margin-bottom:\
+    \ 2rem;
+    }
+    .btn {
+      display: inline-block;
+      background: #e74c3c;
+\
+    \      color: #fff;
+      border: none;
+      padding: 1rem 2.5rem;
+      font-size:\
+    \ 1.1rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+\
+    \      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover {
+\
+    \      background: #c0392b;
+      transform: scale(1.02);
+    }
+    .btn:active\
+    \ { transform: scale(0.98); }
+    .btn:disabled {
+      background: #555;
+\
+    \      cursor: not-allowed;
+      transform: none;
+    }
+    .status {
+  \
+    \    margin-top: 1.5rem;
+      min-height: 1.5rem;
+      font-size: 0.9rem;
+\
+    \    }
+    .status.ok { color: #2ecc71; }
+    .status.err { color: #e74c3c;\
+    \ }
+    .links {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+     \
+    \ border-top: 1px solid #0f3460;
+      font-size: 0.85rem;
+    }
+    .links\
+    \ a { color: #3498db; text-decoration: none; }
+    .links a:hover { text-decoration:\
+    \ underline; }
+  </style>
+</head>
+<body>
+  <div class=\"card\">
+    <h1>Fire\
+    \ demo alert</h1>
+    <p class=\"sub\">Sends a metric to Prometheus so the alert\
+    \ fires and appears in the Alerts page and in Datadog.</p>
+    <button type=\"\
+    button\" class=\"btn\" id=\"fire\">Fire alert</button>
+    <div class=\"status\"\
+    \ id=\"status\"></div>
+    <div class=\"links\">
+      <a href=\"http://ad4656303b12c4ea5be95958b2c11128-359860070.us-east-1.elb.amazonaws.com/alerts\"\
+    \ target=\"_blank\" rel=\"noopener\">Open Prometheus → Alerts</a><br>
+      <a\
+    \ href=\"https://app.datadoghq.com/event/explorer?query=source:prometheus\" target=\"\
+    _blank\" rel=\"noopener\">Datadog Events (Prometheus)</a>
+    </div>
+  </div>
+\
+    \  <script>
+    const btn = document.getElementById('fire');
+    const status\
+    \ = document.getElementById('status');
+
+    function setStatus(msg, isError)\
+    \ {
+      status.textContent = msg;
+      status.className = 'status ' + (isError\
+    \ ? 'err' : 'ok');
+    }
+
+    btn.addEventListener('click', async () => {
+\
+    \      btn.disabled = true;
+      setStatus('Sending…', false);
+      try {
+\
+    \        const r = await fetch('/api/fire', { method: 'POST' });
+        const\
+    \ ok = r.ok;
+        const text = await r.text();
+        if (ok) {
+      \
+    \    setStatus('Alert fired. Check Prometheus Alerts and Datadog in a few seconds.');
+\
+    \        } else {
+          setStatus('Error: ' + (text || r.status));
+    \
+    \    }
+      } catch (e) {
+        setStatus('Request failed: ' + e.message,\
+    \ true);
+      }
+      btn.disabled = false;
+    });
+  </script>
+</body>
+\
+    </html>
+"
+  server.py: "#!/usr/bin/env python3
+\"\"\"Minimal server: serve static page and\
+    \ POST /api/fire pushes metric to Pushgateway.\"\"\"
+import os
+import urllib.request
+\
+    import urllib.error
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+\
+    
+PUSHGATEWAY = os.environ.get(
+    \"PUSHGATEWAY_URL\",
+    \"http://prometheus-prometheus-pushgateway.monitoring.svc.cluster.local:9091\"\
+    ,
+)
+METRIC_JOB = \"demo_manual\"
+METRIC_INSTANCE = \"click\"
+METRIC_NAME =\
+    \ \"demo_manual_alert_fired\"
+
+# Prometheus exposition format
+METRIC_BODY =\
+    \ f\"\"\"# TYPE {METRIC_NAME} gauge
+{METRIC_NAME} 1
+\"\"\"
+
+
+def push_metric():
+\
+    \    url = f\"{PUSHGATEWAY.rstrip('/')}/metrics/job/{METRIC_JOB}/instance/{METRIC_INSTANCE}\"\
+    
+    req = urllib.request.Request(url, data=METRIC_BODY.encode(), method=\"POST\"\
+    )
+    req.add_header(\"Content-Type\", \"text/plain; charset=utf-8\")
+    try:
+\
+    \        with urllib.request.urlopen(req, timeout=5) as r:
+            return\
+    \ r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+ \
+    \   except Exception as e:
+        raise RuntimeError(str(e)) from e
+
+
+class\
+    \ Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+\
+    \        self.directory = os.path.dirname(os.path.abspath(__file__))
+       \
+    \ super().__init__(*args, directory=self.directory, **kwargs)
+
+    def do_POST(self):
+\
+    \        if self.path == \"/api/fire\":
+            self.send_response(200)
+\
+    \            self.send_header(\"Content-Type\", \"text/plain\")
+            self.end_headers()
+\
+    \            try:
+                code = push_metric()
+                self.wfile.write(f\"\
+    OK (pushgateway returned {code})\n\".encode())
+            except Exception\
+    \ as e:
+                self.send_response(500)
+                self.wfile.write(f\"\
+    Error: {e}\n\".encode())
+            return
+        self.send_response(404)
+\
+    \        self.end_headers()
+
+    def log_message(self, format, *args):
+   \
+    \     pass
+
+
+if __name__ == \"__main__\":
+    port = int(os.environ.get(\"\
+    PORT\", \"8080\"))
+    HTTPServer((\"\", port), Handler).serve_forever()
+"
+kind: ConfigMap
+metadata:
+  name: demo-fire-ui-files
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  grafana.ini: '[analytics]
+
+    check_for_updates = true
+
+    [log]
+
+    mode = console
+
+    [paths]
+
+    data = /var/lib/grafana/
+
+    logs = /var/log/grafana
+
+    plugins = /var/lib/grafana/plugins
+
+    provisioning = /etc/grafana/provisioning
+
+    [server]
+
+    domain = ''''
+
+    [unified_storage]
+
+    index_path = /var/lib/grafana-search/bleve
+
+    '
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: grafana
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/version: 12.3.1
+    helm.sh/chart: grafana-10.5.15
+  name: grafana
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  ca.crt: '-----BEGIN CERTIFICATE-----
+
+    MIIDBTCCAe2gAwIBAgIIQuxJB0106rAwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+
+    AxMKa3ViZXJuZXRlczAeFw0yNjAyMDIxMTA2NTFaFw0zNjAxMzExMTExNTFaMBUx
+
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+
+    AoIBAQDRTE/kesepKL61vJ20HEMnCC1kkMaV5OeYW0XgQStB8PVddFLX0m/BmExM
+
+    XhkX7i+pN7qjnHu7MSSe7+fKOcej8WOa+e2IyVvAwyyDuwR5SqXjJ7xITuLnapoB
+
+    3b8HcfBfo2/+rK+typVduVDJz9K1q5dqnFXpzSFl5tSc+FYLCVZ57Rw0+zzosVx3
+
+    s7nO+rsTYkSySgpKJy4vyiyQC00Vjy1lbyN4oPapYSR983K9crVaz+JTflMjm4Hx
+
+    q9FJVAViDTTpuHvMZFJU9rzgnB560TzquuI0M48VTGDKSu9czQCA/w60AXdn8Gza
+
+    EdMkF7hOOzkiosFcAxGdgJdr4YMTAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTOnRsIuT4crQD+RH2BdDaRn92yfjAV
+
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCnTUp0Shg7
+
+    DCgiHHtd77ovbfRy71w3FaFRJ5xXguOVNtcEeS82+GS2FCiQFDDqdFiOQPLcvlUE
+
+    NrWghCzXtz/5WqtFSUYtPAdEni1ntPOM6jdsANEV9EvYxsG7qO/Wu9X4mi0Vw97L
+
+    RHHBZmU6cbSH7VdoO0IMp6PfT2TxPBOJjmx9t4ZL/cj8/qKrylwtIYf3vLxTWB5k
+
+    97qhulmkFJoKojKYQRB+eMkGHs5jkownJ0n6TDD3bJlxepFnSDr0DcprwjGDHL4b
+
+    Lyg1rnctJZDi6fCe5iyirbMOkAK8nUv+eNKtrWsPKeuoL0oafKwbHymSc4KvG+5f
+
+    nWiKcA9iNapq
+
+    -----END CERTIFICATE-----
+
+    '
+kind: ConfigMap
+metadata:
+  name: kube-root-ca.crt
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  webhook.py: "from flask import Flask, request, jsonify
+import json
+import sys
+\
+    
+app = Flask(__name__)
+
+@app.route(\"/webhook\", methods=[\"POST\"])
+def webhook():
+\
+    \    data = request.json
+    alerts = data.get(\"alerts\", [])
+    
+    sep\
+    \ = \"=\" * 80
+    print(f\"\n{sep}\", flush=True)
+    print(f\"PROMETHEUS_ALERT_WEBHOOK:\
+    \ Received {len(alerts)} alerts\", flush=True)
+    print(f\"{sep}\n\", flush=True)
+\
+    \    
+    for i, alert in enumerate(alerts, 1):
+        labels = alert.get(\"\
+    labels\", {})
+        annotations = alert.get(\"annotations\", {})
+        status\
+    \ = alert.get(\"status\", \"unknown\")
+        alertname = labels.get(\"alertname\"\
+    , \"UNKNOWN\")
+        severity = labels.get(\"severity\", \"N/A\")
+       \
+    \ priority = labels.get(\"priority\", \"N/A\")
+        team = labels.get(\"team\"\
+    , \"N/A\")
+        
+        print(f\"ALERT {i}: {alertname} | STATUS={status}\
+    \ | SEVERITY={severity} | PRIORITY={priority} | TEAM={team}\", flush=True)
+ \
+    \       print(f\"  SUMMARY: {annotations.get(summary, N/A)}\", flush=True)
+ \
+    \       print(f\"  DESCRIPTION: {annotations.get(description, N/A)}\", flush=True)
+\
+    \        print(f\"  FULL_JSON: {json.dumps(alert)}\", flush=True)
+        print(\"\
+    \", flush=True)
+    
+    print(f\"{sep}\n\", flush=True)
+    sys.stdout.flush()
+\
+    \    
+    return jsonify({\"status\": \"ok\", \"received\": len(alerts)}), 200
+\
+    
+@app.route(\"/health\", methods=[\"GET\"])
+def health():
+    return jsonify({\"\
+    status\": \"healthy\"}), 200
+
+if __name__ == \"__main__\":
+    print(\"====\
+    \ Datadog Logger Webhook Started ====\", flush=True)
+    app.run(host=\"0.0.0.0\"\
+    , port=9099)
+"
+kind: ConfigMap
+metadata:
+  name: oncall-webhook-config
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  alertmanager.yml: "global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname']
+\
+    \  group_wait: 5s
+  group_interval: 10s
+  receiver: datadog-oncall
+  repeat_interval:\
+    \ 3h
+
+receivers:
+- name: datadog-oncall
+  webhook_configs:
+  - send_resolved:\
+    \ true
+    url: https://event-management-intake.datadoghq.com/api/v2/events/webhook?dd-api-key=<DD_API_KEY>&integration_id=prometheus&oncall_team=eran-team
+"
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: alertmanager
+    app.kubernetes.io/version: v0.31.0
+    helm.sh/chart: alertmanager-1.33.0
+  name: prometheus-alertmanager
+  namespace: monitoring
+
+---
+apiVersion: v1
+data:
+  alerting_rules.yml: "groups:
+
+# Service Availability Alerts
+- name: service_availability
+\
+    \  interval: 30s
+  rules:
+  - alert: ServiceDown
+    expr: up{job=~\"kubernetes-.*\"\
+    } == 0
+    for: 1m
+    labels:
+      severity: critical
+      category: availability
+\
+    \      team: platform
+    annotations:
+      summary: \"Service {{ $labels.job\
+    \ }} is down\"
+      description: \"{{ $labels.job }} on {{ $labels.instance\
+    \ }} has been down for more than 1 minute\"
+  
+  - alert: HighPodRestartRate
+\
+    \    expr: rate(kube_pod_container_status_restarts_total[15m]) > 0.1
+    for:\
+    \ 5m
+    labels:
+      severity: warning
+      category: availability
+   \
+    \   team: platform
+    annotations:
+      summary: \"High pod restart rate detected\"\
+    
+      description: \"Pod {{ $labels.pod }} in namespace {{ $labels.namespace\
+    \ }} is restarting frequently\"
+
+# Resource Usage Alerts
+- name: resource_usage
+\
+    \  interval: 30s
+  rules:
+  - alert: HighCPUUsage
+    expr: (sum(rate(container_cpu_usage_seconds_total{container!=\"\
+    \"}[5m])) by (pod, namespace) / sum(container_spec_cpu_quota{container!=\"\"}/container_spec_cpu_period{container!=\"\
+    \"}) by (pod, namespace)) > 0.8
+    for: 5m
+    labels:
+      severity: warning
+\
+    \      category: resources
+      team: platform
+    annotations:
+      summary:\
+    \ \"High CPU usage detected\"
+      description: \"Pod {{ $labels.pod }} in {{\
+    \ $labels.namespace }} is using >80% CPU\"
+  
+  - alert: HighMemoryUsage
+ \
+    \   expr: (sum(container_memory_working_set_bytes{container!=\"\"}) by (pod, namespace)\
+    \ / sum(container_spec_memory_limit_bytes{container!=\"\"}) by (pod, namespace))\
+    \ > 0.8
+    for: 5m
+    labels:
+      severity: warning
+      category: resources
+\
+    \      team: platform
+    annotations:
+      summary: \"High memory usage detected\"\
+    
+      description: \"Pod {{ $labels.pod }} in {{ $labels.namespace }} is using\
+    \ >80% memory\"
+  
+  - alert: PodCPUThrottling
+    expr: rate(container_cpu_cfs_throttled_seconds_total{container!=\"\
+    \"}[5m]) > 0.5
+    for: 5m
+    labels:
+      severity: info
+      category:\
+    \ performance
+      team: platform
+    annotations:
+      summary: \"Pod CPU\
+    \ throttling detected\"
+      description: \"Pod {{ $labels.pod }} is being CPU\
+    \ throttled\"
+
+# Application Performance Alerts
+- name: application_performance
+\
+    \  interval: 30s
+  rules:
+  - alert: HighLatency
+    expr: histogram_quantile(0.95,\
+    \ sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)) > 2
+\
+    \    for: 5m
+    labels:
+      severity: warning
+      category: performance
+\
+    \      team: backend
+    annotations:
+      summary: \"High latency detected\
+    \ on {{ $labels.service }}\"
+      description: \"95th percentile latency is\
+    \ above 2 seconds\"
+  
+  - alert: HighErrorRate
+    expr: (sum(rate(http_requests_total{status=~\"\
+    5..\"}[5m])) by (service) / sum(rate(http_requests_total[5m])) by (service)) >\
+    \ 0.05
+    for: 5m
+    labels:
+      severity: critical
+      category: errors
+\
+    \      team: backend
+    annotations:
+      summary: \"High error rate on {{\
+    \ $labels.service }}\"
+      description: \"Error rate is above 5% for service\
+    \ {{ $labels.service }}\"
+
+# Node Health Alerts
+- name: node_health
+  interval:\
+    \ 30s
+  rules:
+  - alert: NodeNotReady
+    expr: kube_node_status_condition{condition=\"\
+    Ready\",status=\"true\"} == 0
+    for: 5m
+    labels:
+      severity: critical
+\
+    \      category: infrastructure
+      team: platform
+    annotations:
+    \
+    \  summary: \"Node {{ $labels.node }} is not ready\"
+      description: \"Node\
+    \ has been in NotReady state for more than 5 minutes\"
+  
+  - alert: NodeHighDiskPressure
+\
+    \    expr: kube_node_status_condition{condition=\"DiskPressure\",status=\"true\"\
+    } == 1
+    for: 5m
+    labels:
+      severity: warning
+      category: infrastructure
+\
+    \      team: platform
+    annotations:
+      summary: \"Node {{ $labels.node\
+    \ }} has disk pressure\"
+      description: \"Node is experiencing disk pressure\"\
+    
+  
+  - alert: NodeMemoryPressure
+    expr: kube_node_status_condition{condition=\"\
+    MemoryPressure\",status=\"true\"} == 1
+    for: 5m
+    labels:
+      severity:\
+    \ warning
+      category: infrastructure
+      team: platform
+    annotations:
+\
+    \      summary: \"Node {{ $labels.node }} has memory pressure\"
+      description:\
+    \ \"Node is experiencing memory pressure\"
+
+# Demo-specific alerts (always firing\
+    \ for demonstration)
+- name: demo_alerts
+  interval: 10s
+  rules:
+  - alert:\
+    \ DemoFrontendHealthCheck
+    expr: up{job=\"kubernetes-pods\", pod=~\"demo-frontend.*\"\
+    } or vector(1)
+    for: 10s
+    labels:
+      severity: info
+      category:\
+    \ demo
+      service: frontend
+      team: demo
+    annotations:
+      summary:\
+    \ \"Frontend service health check\"
+      description: \"Monitoring frontend\
+    \ service availability\"
+  - alert: DemoAPILatency
+    expr: vector(1) > 0
+\
+    \    for: 10s
+    labels:
+      severity: warning
+      category: performance
+\
+    \      service: api
+      team: demo
+    annotations:
+      summary: \"API\
+    \ response time elevated\"
+      description: \"API service showing increased\
+    \ latency (Demo Alert)\"
+  - alert: DemoDatabaseConnections
+    expr: vector(1)\
+    \ > 0
+    for: 10s
+    labels:
+      severity: info
+      category: database
+\
+    \      service: database
+      team: demo
+    annotations:
+      summary: \"\
+    Database connection pool usage\"
+      description: \"Monitoring database connection\
+    \ pool (Demo Alert)\"
+  - alert: DemoHighTraffic
+    expr: vector(1) > 0
+ \
+    \   for: 10s
+    labels:
+      severity: info
+      category: traffic
+   \
+    \   service: frontend
+      team: demo
+    annotations:
+      summary: \"High\
+    \ traffic detected\"
+      description: \"Frontend receiving elevated traffic\
+    \ levels (Demo Alert)\"
+
+# Manual fire from Demo Fire UI (click button → metric\
+    \ pushed → this alert fires)
+- name: manual_fire
+  interval: 15s
+  rules:
+\
+    \  - alert: DemoManualFire
+    expr: demo_manual_alert_fired > 0
+    for: 15s
+\
+    \    labels:
+      severity: critical
+      category: demo
+      team: demo
+\
+    \    annotations:
+      summary: \"Manual demo alert fired from UI\"
+      description:\
+    \ \"This alert was triggered by clicking Fire in the Demo Fire UI\"
+
+- name:\
+    \ javaapp001_replicas
+  interval: 30s
+  rules:
+  - alert: Javaapp001ReplicaCountMismatch
+\
+    \    expr: kube_deployment_spec_replicas{deployment=\"javaapp001\"} != 3
+   \
+    \ for: 1m
+    labels:
+      severity: critical
+      category: deployment
+\
+    \      team: platform
+    annotations:
+      summary: \"Javaapp001 replica count\
+    \ is not 3 (expected 3)\"
+      description: \"Deployment javaapp001 has {{ $value\
+    \ }} replicas (expected 3). Namespace: {{ $labels.namespace }}.\"
+
+
+"
+  alerts: '{}
+
+    '
+  allow-snippet-annotations: 'false'
+  prometheus.yml: "global:
+  evaluation_interval: 1m
+  scrape_interval: 1m
+  scrape_timeout:\
+    \ 10s
+scrape_configs:
+- job_name: kubernetes-api-servers
+  bearer_token_file:\
+    \ /var/run/secrets/kubernetes.io/serviceaccount/token
+  kubernetes_sd_configs:
+\
+    \  - role: endpoints
+  relabel_configs:
+  - action: keep
+    regex: default;kubernetes;https
+\
+    \    source_labels:
+    - __meta_kubernetes_namespace
+    - __meta_kubernetes_service_name
+\
+    \    - __meta_kubernetes_endpoint_port_name
+  scheme: https
+  tls_config:
+\
+    \    ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+- job_name:\
+    \ kubernetes-nodes
+  bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+\
+    \  kubernetes_sd_configs:
+  - role: node
+  relabel_configs:
+  - action: labelmap
+\
+    \    regex: __meta_kubernetes_node_label_(.+)
+  scheme: https
+  tls_config:
+\
+    \    ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    insecure_skip_verify:\
+    \ true
+- job_name: kubernetes-nodes-cadvisor
+  bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+\
+    \  kubernetes_sd_configs:
+  - role: node
+  metrics_path: /metrics/cadvisor
+\
+    \  relabel_configs:
+  - action: labelmap
+    regex: __meta_kubernetes_node_label_(.+)
+\
+    \  - source_labels:
+    - __metrics_path__
+    target_label: metrics_path
+\
+    \  scheme: https
+  tls_config:
+    ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+\
+    \    insecure_skip_verify: true
+- job_name: kubernetes-pods
+  honor_labels:\
+    \ true
+  kubernetes_sd_configs:
+  - role: pod
+  relabel_configs:
+  - action:\
+    \ keep
+    regex: true
+    source_labels:
+    - __meta_kubernetes_pod_annotation_prometheus_io_scrape
+\
+    \  - action: drop
+    regex: true
+    source_labels:
+    - __meta_kubernetes_pod_annotation_prometheus_io_scrape_slow
+\
+    \  - action: replace
+    regex: (https?)
+    source_labels:
+    - __meta_kubernetes_pod_annotation_prometheus_io_scheme
+\
+    \    target_label: __scheme__
+  - action: replace
+    regex: (.+)
+    source_labels:
+\
+    \    - __meta_kubernetes_pod_annotation_prometheus_io_path
+    target_label:\
+    \ __metrics_path__
+  - action: replace
+    regex: (\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
+\
+    \    replacement: '[$2]:$1'
+    source_labels:
+    - __meta_kubernetes_pod_annotation_prometheus_io_port
+\
+    \    - __meta_kubernetes_pod_ip
+    target_label: __address__
+  - action: replace
+\
+    \    regex: (\d+);((([0-9]+?)(\.|$)){4})
+    replacement: $2:$1
+    source_labels:
+\
+    \    - __meta_kubernetes_pod_annotation_prometheus_io_port
+    - __meta_kubernetes_pod_ip
+\
+    \    target_label: __address__
+  - action: labelmap
+    regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
+\
+    \    replacement: __param_$1
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+\
+    \  - action: replace
+    source_labels:
+    - __meta_kubernetes_namespace
+\
+    \    target_label: namespace
+  - action: replace
+    source_labels:
+    - __meta_kubernetes_pod_name
+\
+    \    target_label: pod
+  - action: drop
+    regex: Pending|Succeeded|Failed|Completed
+\
+    \    source_labels:
+    - __meta_kubernetes_pod_phase
+  - action: replace
+\
+    \    source_labels:
+    - __meta_kubernetes_pod_node_name
+    target_label:\
+    \ node
+- job_name: kubernetes-pods-slow
+  honor_labels: true
+  kubernetes_sd_configs:
+\
+    \  - role: pod
+  relabel_configs:
+  - action: keep
+    regex: true
+    source_labels:
+\
+    \    - __meta_kubernetes_pod_annotation_prometheus_io_scrape_slow
+  - action:\
+    \ replace
+    regex: (https?)
+    source_labels:
+    - __meta_kubernetes_pod_annotation_prometheus_io_scheme
+\
+    \    target_label: __scheme__
+  - action: replace
+    regex: (.+)
+    source_labels:
+\
+    \    - __meta_kubernetes_pod_annotation_prometheus_io_path
+    target_label:\
+    \ __metrics_path__
+  - action: replace
+    regex: (\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
+\
+    \    replacement: '[$2]:$1'
+    source_labels:
+    - __meta_kubernetes_pod_annotation_prometheus_io_port
+\
+    \    - __meta_kubernetes_pod_ip
+    target_label: __address__
+  - action: replace
+\
+    \    regex: (\d+);((([0-9]+?)(\.|$)){4})
+    replacement: $2:$1
+    source_labels:
+\
+    \    - __meta_kubernetes_pod_annotation_prometheus_io_port
+    - __meta_kubernetes_pod_ip
+\
+    \    target_label: __address__
+  - action: labelmap
+    regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
+\
+    \    replacement: __param_$1
+  - action: labelmap
+    regex: __meta_kubernetes_pod_label_(.+)
+\
+    \  - action: replace
+    source_labels:
+    - __meta_kubernetes_namespace
+\
+    \    target_label: namespace
+  - action: replace
+    source_labels:
+    - __meta_kubernetes_pod_name
+\
+    \    target_label: pod
+  - action: drop
+    regex: Pending|Succeeded|Failed|Completed
+\
+    \    source_labels:
+    - __meta_kubernetes_pod_phase
+  - action: replace
+\
+    \    source_labels:
+    - __meta_kubernetes_pod_node_name
+    target_label:\
+    \ node
+  scrape_interval: 5m
+  scrape_timeout: 30s
+- job_name: kubernetes-service-endpoints
+\
+    \  honor_labels: true
+  kubernetes_sd_configs:
+  - role: endpoints
+  relabel_configs:
+\
+    \  - action: keep
+    regex: true
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_scrape
+\
+    \  - action: drop
+    regex: true
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_scrape_slow
+\
+    \  - action: replace
+    regex: (https?)
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_scheme
+\
+    \    target_label: __scheme__
+  - action: replace
+    regex: (.+)
+    source_labels:
+\
+    \    - __meta_kubernetes_service_annotation_prometheus_io_path
+    target_label:\
+    \ __metrics_path__
+  - action: replace
+    regex: (.+?)(?::\d+)?;(\d+)
+ \
+    \   replacement: $1:$2
+    source_labels:
+    - __address__
+    - __meta_kubernetes_service_annotation_prometheus_io_port
+\
+    \    target_label: __address__
+  - action: labelmap
+    regex: __meta_kubernetes_service_annotation_prometheus_io_param_(.+)
+\
+    \    replacement: __param_$1
+  - action: labelmap
+    regex: __meta_kubernetes_service_label_(.+)
+\
+    \  - action: replace
+    source_labels:
+    - __meta_kubernetes_namespace
+\
+    \    target_label: namespace
+  - action: replace
+    source_labels:
+    - __meta_kubernetes_service_name
+\
+    \    target_label: service
+  - action: replace
+    source_labels:
+    - __meta_kubernetes_pod_node_name
+\
+    \    target_label: node
+- job_name: kubernetes-service-endpoints-slow
+  honor_labels:\
+    \ true
+  kubernetes_sd_configs:
+  - role: endpoints
+  relabel_configs:
+  -\
+    \ action: keep
+    regex: true
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_scrape_slow
+\
+    \  - action: replace
+    regex: (https?)
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_scheme
+\
+    \    target_label: __scheme__
+  - action: replace
+    regex: (.+)
+    source_labels:
+\
+    \    - __meta_kubernetes_service_annotation_prometheus_io_path
+    target_label:\
+    \ __metrics_path__
+  - action: replace
+    regex: (.+?)(?::\d+)?;(\d+)
+ \
+    \   replacement: $1:$2
+    source_labels:
+    - __address__
+    - __meta_kubernetes_service_annotation_prometheus_io_port
+\
+    \    target_label: __address__
+  - action: labelmap
+    regex: __meta_kubernetes_service_annotation_prometheus_io_param_(.+)
+\
+    \    replacement: __param_$1
+  - action: labelmap
+    regex: __meta_kubernetes_service_label_(.+)
+\
+    \  - action: replace
+    source_labels:
+    - __meta_kubernetes_namespace
+\
+    \    target_label: namespace
+  - action: replace
+    source_labels:
+    - __meta_kubernetes_service_name
+\
+    \    target_label: service
+  - action: replace
+    source_labels:
+    - __meta_kubernetes_pod_node_name
+\
+    \    target_label: node
+  scrape_interval: 5m
+  scrape_timeout: 30s
+- job_name:\
+    \ kubernetes-services
+  honor_labels: true
+  kubernetes_sd_configs:
+  - role:\
+    \ service
+  metrics_path: /probe
+  params:
+    module:
+    - http_2xx
+  relabel_configs:
+\
+    \  - action: keep
+    regex: true
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_probe
+\
+    \  - source_labels:
+    - __address__
+    target_label: __param_target
+  -\
+    \ replacement: blackbox
+    target_label: __address__
+  - source_labels:
+ \
+    \   - __param_target
+    target_label: instance
+  - action: labelmap
+    regex:\
+    \ __meta_kubernetes_service_label_(.+)
+  - source_labels:
+    - __meta_kubernetes_namespace
+\
+    \    target_label: namespace
+  - source_labels:
+    - __meta_kubernetes_service_name
+\
+    \    target_label: service
+- job_name: prometheus
+  static_configs:
+  - targets:
+\
+    \    - localhost:9090
+- job_name: prometheus-pushgateway
+  honor_labels: true
+\
+    \  kubernetes_sd_configs:
+  - role: service
+  relabel_configs:
+  - action:\
+    \ keep
+    regex: pushgateway
+    source_labels:
+    - __meta_kubernetes_service_annotation_prometheus_io_probe
+\
+    rule_files:
+- /etc/config/recording_rules.yml
+- /etc/config/alerting_rules.yml
+\
+    - /etc/config/rules
+- /etc/config/alerts
+alerting:
+  alertmanagers:
+  - kubernetes_sd_configs:
+\
+    \      - role: pod
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+\
+    \    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+\
+    \    relabel_configs:
+    - source_labels: [__meta_kubernetes_namespace]
+  \
+    \    regex: monitoring
+      action: keep
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+\
+    \      regex: prometheus
+      action: keep
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+\
+    \      regex: alertmanager
+      action: keep
+    - source_labels: [__meta_kubernetes_pod_container_port_number]
+\
+    \      regex: \"9093\"
+      action: keep
+"
+  recording_rules.yml: '{}
+
+    '
+  rules: '{}
+
+    '
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/component: server
+    app.kubernetes.io/instance: prometheus
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: prometheus
+    app.kubernetes.io/version: v3.9.1
+    helm.sh/chart: prometheus-28.9.1
+  name: prometheus-server
+  namespace: monitoring

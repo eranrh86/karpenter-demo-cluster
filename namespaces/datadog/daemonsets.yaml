@@ -1,0 +1,164 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: datadog-agent
+  namespace: datadog
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: datadog-agent
+  template:
+    metadata:
+      labels:
+        app: datadog-agent
+      name: datadog-agent
+    spec:
+      containers:
+      - env:
+        - name: DD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: api-key
+              name: datadog-secret
+        - name: DD_SITE
+          value: datadoghq.com
+        - name: DD_CLUSTER_NAME
+          value: karpenter-demo
+        - name: DD_ENV
+          value: demo
+        - name: DD_CLUSTER_AGENT_ENABLED
+          value: 'true'
+        - name: DD_CLUSTER_AGENT_KUBERNETES_SERVICE_NAME
+          value: datadog-cluster-agent
+        - name: DD_CLUSTER_AGENT_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: token
+              name: datadog-secret
+        - name: DD_APM_ENABLED
+          value: 'true'
+        - name: DD_APM_NON_LOCAL_TRAFFIC
+          value: 'true'
+        - name: DD_LOGS_ENABLED
+          value: 'true'
+        - name: DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL
+          value: 'true'
+        - name: DD_CONTAINER_EXCLUDE
+          value: image:gcr.io/datadoghq/agent
+        - name: DD_ORCHESTRATOR_EXPLORER_ENABLED
+          value: 'true'
+        - name: DD_PROCESS_AGENT_ENABLED
+          value: 'true'
+        - name: DD_SYSTEM_PROBE_ENABLED
+          value: 'false'
+        - name: DD_KUBERNETES_KUBELET_NODENAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: KUBERNETES_NODE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: DD_DOGSTATSD_NON_LOCAL_TRAFFIC
+          value: 'true'
+        - name: DD_LEADER_ELECTION
+          value: 'false'
+        - name: DD_COLLECT_KUBERNETES_EVENTS
+          value: 'false'
+        - name: DD_KUBERNETES_KUBELET_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: DD_KUBERNETES_KUBELET_TLS_VERIFY
+          value: 'false'
+        - name: DD_TAGS
+          value: storage:cloudprem log_routing:cloudprem cluster:karpenter-demo
+        image: gcr.io/datadoghq/agent:7
+        imagePullPolicy: IfNotPresent
+        name: datadog-agent
+        ports:
+        - containerPort: 8125
+          name: dogstatsdport
+          protocol: UDP
+        - containerPort: 8126
+          name: traceport
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 1m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /host/proc
+          name: proc
+          readOnly: true
+        - mountPath: /host/sys/fs/cgroup
+          name: cgroup
+          readOnly: true
+        - mountPath: /var/run/containerd/containerd.sock
+          name: containerd
+        - mountPath: /opt/datadog-agent/run
+          name: pointerdir
+        - mountPath: /etc/passwd
+          name: passwd
+          readOnly: true
+        - mountPath: /var/log/pods
+          name: logpodpath
+          readOnly: true
+        - mountPath: /var/log/containers
+          name: symlinkcontainerpath
+          readOnly: true
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      hostPID: true
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: datadog-agent
+      serviceAccountName: datadog-agent
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - operator: Exists
+      volumes:
+      - hostPath:
+          path: /proc
+          type: ''
+        name: proc
+      - hostPath:
+          path: /sys/fs/cgroup
+          type: ''
+        name: cgroup
+      - hostPath:
+          path: /var/run/containerd/containerd.sock
+          type: ''
+        name: containerd
+      - hostPath:
+          path: /opt/datadog-agent/run
+          type: ''
+        name: pointerdir
+      - hostPath:
+          path: /etc/passwd
+          type: ''
+        name: passwd
+      - hostPath:
+          path: /var/log/pods
+          type: DirectoryOrCreate
+        name: logpodpath
+      - hostPath:
+          path: /var/log/containers
+          type: DirectoryOrCreate
+        name: symlinkcontainerpath
+  updateStrategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate

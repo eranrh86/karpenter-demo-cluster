@@ -1,0 +1,94 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: metricbeat
+  name: metricbeat
+  namespace: metricbeat-opw
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: metricbeat
+  template:
+    metadata:
+      labels:
+        app: metricbeat
+    spec:
+      containers:
+      - args:
+        - -c
+        - /etc/metricbeat.yml
+        - -e
+        - -system.hostfs=/hostfs
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        image: docker.elastic.co/beats/metricbeat:8.13.0
+        imagePullPolicy: IfNotPresent
+        name: metricbeat
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        securityContext:
+          runAsUser: 0
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/metricbeat.yml
+          name: config
+          readOnly: true
+          subPath: metricbeat.yml
+        - mountPath: /hostfs/proc
+          name: proc
+          readOnly: true
+        - mountPath: /hostfs/sys
+          name: sys
+          readOnly: true
+        - mountPath: /hostfs
+          name: rootfs
+          readOnly: true
+      dnsPolicy: ClusterFirstWithHostNet
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: metricbeat
+      serviceAccountName: metricbeat
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - operator: Exists
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: metricbeat-config
+        name: config
+      - hostPath:
+          path: /proc
+          type: ''
+        name: proc
+      - hostPath:
+          path: /sys
+          type: ''
+        name: sys
+      - hostPath:
+          path: /
+          type: ''
+        name: rootfs
+  updateStrategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate

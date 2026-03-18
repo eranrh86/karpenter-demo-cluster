@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: load-test
+    tags.datadoghq.com/env: ci
+    tags.datadoghq.com/service: load-test
+  name: load-test-workers
+  namespace: load-test
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 10
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: load-test
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: load-test
+        tags.datadoghq.com/env: ci
+        tags.datadoghq.com/service: load-test
+    spec:
+      containers:
+      - args:
+        - --cpu
+        - '2'
+        - --vm
+        - '1'
+        - --vm-bytes
+        - 512M
+        - --timeout
+        - 600s
+        - --verbose
+        command:
+        - stress
+        env:
+        - name: DD_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: DD_SERVICE
+          value: load-test
+        - name: DD_ENV
+          value: ci
+        image: polinux/stress
+        imagePullPolicy: Always
+        name: stress
+        resizePolicy:
+        - resourceName: cpu
+          restartPolicy: NotRequired
+        - resourceName: memory
+          restartPolicy: NotRequired
+        resources:
+          limits:
+            cpu: '1'
+            memory: 1Gi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - effect: NoSchedule
+        key: karpenter.sh/do-not-disrupt
+        operator: Exists
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app: load-test
+        maxSkew: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway

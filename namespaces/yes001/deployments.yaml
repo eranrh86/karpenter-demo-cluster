@@ -1,0 +1,149 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: yes001
+  name: yes001
+  namespace: yes001
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: yes001
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: yes001
+        tags.datadoghq.com/env: demo
+        tags.datadoghq.com/service: yes001-tv
+        tags.datadoghq.com/version: 1.0.0
+    spec:
+      containers:
+      - image: nginx:1.27-alpine
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: yes001
+        ports:
+        - containerPort: 80
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /usr/share/nginx/html
+          name: html-vol
+          readOnly: true
+        - mountPath: /etc/nginx/nginx.conf
+          name: nginx-config
+          readOnly: true
+          subPath: nginx.conf
+      dnsPolicy: ClusterFirst
+      initContainers:
+      - args:
+        - "set -e
+echo \"Setting up yes001 file structure...\"
+
+# Create directories
+\
+          mkdir -p /html/before /html/after /html/_nuxt /html/api
+
+# Copy main files\
+          \ from ConfigMap
+cp /config-pages/index.html    /html/index.html
+cp /config-pages/before.html\
+          \   /html/before/index.html
+cp /config-pages/after.html    /html/after/index.html
+\
+          cp /config-pages/rum-config.js /html/rum-config.js
+cp /config-pages/channels.json\
+          \ /html/api/channels.json
+cp /config-pages/programs.json /html/api/programs.json
+\
+          cp /config-pages/user.json     /html/api/user.json
+
+# Generate Nuxt-like\
+          \ CSS stubs (exactly matching yes.co.il filenames)
+for f in \"AxShimmer.Bh9iye40\"\
+          \ \"AxInput.Dz-SR9st\" \"AxHtml.CaG4Z86x\" \"AxNavFloatingSearchResultElement.DTSkD5s1\"\
+          \ \"AxCard.Bk2XyZ9f\" \"AxButton.Cm3LpA8s\"; do
+  echo \"/* Nuxt generated\
+          \ CSS: $f */\" > /html/_nuxt/$f.css
+done
+
+# Generate Nuxt-like JS stubs\
+          \ (exactly matching yes.co.il filenames)
+for f in \"cH0Jb-HO\" \"RSfW2Un7\"\
+          \ \"CWXFq0fu\" \"IvHwDpZr\" \"DF0rLa_K\" \"f8Jv3ua\" \"D1AUqKZU\" \"CC9DBTh0\"\
+          \ \"Dn3LRy0K\" \"kF0i_yMn\" \"B3oKhHXL\" \"BPeAD86k\" \"D0RDGNUg\" \"Xo1o1g7\"\
+          \ \"DEXD331A\"; do
+  echo \"(function(){/* Nuxt chunk: $f - $(date) */})();\"\
+          \ > /html/_nuxt/$f.js
+done
+
+echo \"File structure ready:\"
+find /html\
+          \ -type f | sort
+"
+        command:
+        - /bin/sh
+        - -c
+        image: busybox:1.36
+        imagePullPolicy: IfNotPresent
+        name: setup-files
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /html
+          name: html-vol
+        - mountPath: /config-pages
+          name: pages-config
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir: {}
+        name: html-vol
+      - configMap:
+          defaultMode: 420
+          name: yes001-pages
+        name: pages-config
+      - configMap:
+          defaultMode: 420
+          name: yes001-nginx
+        name: nginx-config
